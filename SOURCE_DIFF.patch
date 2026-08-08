@@ -1,0 +1,1368 @@
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/.gitignore /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/.gitignore
+--- original/ColorMatrix-master/.gitignore	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/.gitignore	2026-08-06 21:32:28.839200551 +0000
+@@ -0,0 +1,5 @@
++build/generated/
++*.obj
++*.lib
++*.exp
++*.pdb
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/PATCH_NOTES.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/PATCH_NOTES.md
+--- original/ColorMatrix-master/PATCH_NOTES.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/PATCH_NOTES.md	2026-08-06 21:32:28.838541942 +0000
+@@ -0,0 +1,56 @@
++# Patch notes
++
++## Root cause
++
++The source defines five luma coefficient sets in this order:
++
++| Index | Matrix |
++|---:|---|
++| 0 | Rec.709 |
++| 1 | FCC |
++| 2 | Rec.601 / SMPTE 170M |
++| 3 | SMPTE 240M |
++| 4 | Rec.2020 |
++
++`calc_coefficients()` generates every source/destination pair in nested loops,
++so `yuv_convert` is row-major with a row width of five. ColorMatrix 2.6 still
++used the old four-wide expression in explicit mode selection and old row
++offsets in `findMode()`.
++
++Requested `Rec.601 -> Rec.709` therefore selected:
++
++- buggy index: `2 * 4 + 0 = 8`
++- actual entry 8 in a 5×5 table: `FCC -> SMPTE 240M`
++- correct index: `2 * 5 + 0 = 10`
++
++## Source changes
++
++- Added `YUV_CONVERSION_COUNT` and `MATRIX_MODE_INDEX`.
++- Replaced explicit and hint/D2V index arithmetic with the helper.
++- Remapped legacy SIMD modes:
++  - kernel 1: `1, 2, 3, 16, 17`
++  - kernel 2: `5, 8, 10, 13, 15`
++  - kernel 3: `7`
++  - kernel 4: `11`
++- Replaced the stale four-wide debug-name chain with a 25-entry table.
++- Added a defensive index bounds check.
++
++## Hybrid binary patches
++
++The supplied Hybrid binaries are separate API3/64-bit ports whose exact source
++was not in the repository archive. `tools/patch_hybrid_binaries.py` therefore
++performs a narrow, hash-locked patch of those exact DLLs:
++
++- x64: rewrites the constructor arithmetic in place and changes `findMode()`
++  row offsets from `8/12/4` to `10/15/5`.
++- x86: redirects the constructor's old four-wide calculation to an executable
++  code cave inside existing `.text` padding, then changes both inlined
++  `findMode()` copies from `8/12/4` to `10/15/5`.
++
++The Hybrid binaries contain only the C conversion path, so no binary SIMD
++mode-dispatch changes are needed.
++
++The legacy debug-label selector embedded in the exact Hybrid binaries is not
++rewritten. With `debug=true`, a corrected five-wide mode can therefore be
++reported as `unknown`; this does not affect pixel processing. The newly
++compiled source builds contain corrected diagnostic names.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/README.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/README.md
+--- original/ColorMatrix-master/README.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/README.md	2026-08-06 21:32:28.837826582 +0000
+@@ -0,0 +1,61 @@
++# ColorMatrix 2.6.1 — five-wide indexing fix
++
++This repository is a corrected derivative of the user-supplied
++`sorayuki/ColorMatrix` master snapshot.
++
++## Fixed defect
++
++ColorMatrix 2.6 expanded its luma-coefficient list from four matrices to five
++when Rec.2020 support was added, so the flattened conversion table became 5×5.
++Several call sites still indexed it as a four-column table. In particular:
++
++```cpp
++source * 4 + dest
++```
++
++has been replaced with a single five-wide helper:
++
++```cpp
++#define MATRIX_MODE_INDEX(source, dest) \
++    ((source) * YUV_COEFFS_LUMA_COUNT + (dest))
++```
++
++For `Rec.601 -> Rec.709`, the correct index is now `2 * 5 + 0 = 10` rather than
++8. Index 8 belongs to `FCC -> SMPTE 240M` in the five-wide table.
++
++## Other corrections
++
++- D2V/hint-based source detection now uses the same five-wide index helper.
++- Legacy MMX/SSE2 dispatcher mode numbers were remapped to the 5×5 table.
++- Diagnostic conversion names cover all 25 source/destination pairs.
++- Conversion-array bounds are checked before use.
++- The coefficient scratch array uses the shared conversion-count constant.
++- Small portability changes permit C-only x86/x64 reference builds.
++
++## Binaries
++
++The separately supplied binary package contains two kinds of DLLs:
++
++1. **`hybrid-drop-in` — recommended for Hybrid.** These are byte-level patches
++   of the exact 32-bit and 64-bit DLLs supplied with the report. Their original
++   exports, imports, ABI, and all unrelated machine code are retained.
++2. **`source-build` — review/reference builds.** These are newly compiled from
++   this repository using the script under `build/`. They are C-only and have
++   not been runtime-tested in Hybrid or AviSynth on Windows.
++
++Back up the original Hybrid DLLs and test a short clip before adopting a
++replacement.
++
++## Tests
++
++```bash
++python tests/test_mode_index.py
++build/build_portable_clang_cl.sh
++```
++
++The machine-code patcher verifies the exact SHA-256 of each supported original
++DLL and refuses to modify unknown binaries.
++
++## License
++
++The upstream source is distributed under GPLv2; see `gpl.txt`.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/UPSTREAM.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/UPSTREAM.md
+--- original/ColorMatrix-master/UPSTREAM.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/UPSTREAM.md	2026-08-06 21:32:28.840105906 +0000
+@@ -0,0 +1,6 @@
++# Upstream basis
++
++This tree was produced from the `ColorMatrix-master.zip` snapshot supplied by
++the user, identified as the `sorayuki/ColorMatrix` repository. The supplied
++archive did not include Git metadata, so no upstream commit hash is asserted
++here.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/VALIDATION.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/VALIDATION.md
+--- original/ColorMatrix-master/VALIDATION.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/VALIDATION.md	2026-08-06 22:12:13.447489710 +0000
+@@ -0,0 +1,21 @@
++# Validation performed for this release
++
++The following checks were run before packaging:
++
++- `tests/test_mode_index.py` passed.
++- The explicit Rec.601 -> Rec.709 index resolves to 10 in the 5x5 table.
++- The hint/D2V row offsets and legacy SIMD dispatcher groups were checked
++  against the corrected five-wide numbering.
++- `tools/patch_hybrid_binaries.py` reproduced the expected x86 and x64 output
++  hashes from the exact supplied Hybrid DLLs.
++- `tests/test_patched_pe.py` passed for both patched Hybrid DLLs.
++- The portable clang-cl build completed for both x86 and x64.
++- Two consecutive portable builds produced identical SHA-256 hashes.
++- The compiled outputs were inspected as PE32 i386 and PE32+ x86-64 DLLs.
++- The compiled x86 DLL exports `_AvisynthPluginInit2@4` and
++  `_AvisynthPluginInit3@8`; the compiled x64 DLL exports
++  `AvisynthPluginInit2` and `AvisynthPluginInit3`.
++
++Runtime execution inside Selur Hybrid/AviSynth was not possible in the Linux
++build container. The ABI-preserving `hybrid-drop-in` binaries in the separate
++binary package are therefore recommended for actual Hybrid testing.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/README.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/README.md
+--- original/ColorMatrix-master/build/README.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/README.md	2026-08-06 21:32:28.833154172 +0000
+@@ -0,0 +1,18 @@
++# Portable reference build
++
++`build_portable_clang_cl.sh` cross-compiles 32-bit and 64-bit Windows DLLs with
++`clang-cl` and `lld-link`. It intentionally uses the C conversion path for both
++architectures and supplies a small compatibility layer because the upstream
++snapshot contains a Visual Studio 2005 Win32 project and an AviSynth 2.5-era
++SDK header.
++
++The resulting DLLs are placed in:
++
++- `bin/source-build/x86/colormatrix.dll`
++- `bin/source-build/x64/ColorMatrix64.dll`
++
++These binaries prove that the corrected source compiles for both Windows
++architectures, but they were **not runtime-tested inside Hybrid or AviSynth on
++Windows**. The exact source of Hybrid's separately ported API3/x64 DLLs was not
++present in the supplied repository archive. For Hybrid, use the
++ABI-preserving `hybrid-drop-in` binaries from the separate binary package.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/build_portable_clang_cl.sh /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/build_portable_clang_cl.sh
+--- original/ColorMatrix-master/build/build_portable_clang_cl.sh	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/build_portable_clang_cl.sh	2026-08-06 21:33:50.973792052 +0000
+@@ -0,0 +1,134 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
++BUILD_DIR="$ROOT/build/generated"
++OUT_DIR="$ROOT/bin/source-build"
++
++for tool in clang-cl lld-link; do
++  command -v "$tool" >/dev/null 2>&1 || {
++    echo "error: $tool is required" >&2
++    exit 1
++  }
++done
++
++rm -rf "$BUILD_DIR"
++mkdir -p "$BUILD_DIR"/{imports/x86,imports/x64,obj/x86,obj/x64} "$OUT_DIR"/{x86,x64}
++
++cat > "$BUILD_DIR/imports/x86/kernel32.def" <<'EOF'
++LIBRARY KERNEL32.dll
++EXPORTS
++  InterlockedIncrement
++  InterlockedDecrement
++  GetCurrentThreadId
++  OutputDebugStringA
++  CreateEventA
++  CreateThread
++  lstrcmpiA
++  ResetEvent
++  SetEvent
++  WaitForSingleObject
++  WaitForMultipleObjects
++  CloseHandle
++  GetCurrentProcess
++  GetProcessAffinityMask
++EOF
++
++cat > "$BUILD_DIR/imports/x64/kernel32.def" <<'EOF'
++LIBRARY KERNEL32.dll
++EXPORTS
++  InterlockedIncrement
++  InterlockedDecrement
++  GetCurrentThreadId
++  OutputDebugStringA
++  CreateEventA
++  CreateThread
++  lstrcmpiA
++  ResetEvent
++  SetEvent
++  WaitForSingleObject
++  WaitForMultipleObjects
++  CloseHandle
++  GetCurrentProcess
++  GetProcessAffinityMask
++EOF
++
++cat > "$BUILD_DIR/imports/x86/msvcrt.def" <<'EOF'
++LIBRARY MSVCRT.dll
++EXPORTS
++  sprintf
++  malloc
++  calloc
++  fopen
++  sscanf
++  fgets
++  strncmp
++  memset
++  memcpy
++  fclose
++  free
++  abs
++EOF
++cp "$BUILD_DIR/imports/x86/msvcrt.def" "$BUILD_DIR/imports/x64/msvcrt.def"
++
++lld-link /lib /machine:x86 /def:"$BUILD_DIR/imports/x86/kernel32.def" /out:"$BUILD_DIR/imports/x86/kernel32.lib"
++lld-link /lib /machine:x86 /def:"$BUILD_DIR/imports/x86/msvcrt.def" /out:"$BUILD_DIR/imports/x86/msvcrt.lib"
++lld-link /lib /machine:x64 /def:"$BUILD_DIR/imports/x64/kernel32.def" /out:"$BUILD_DIR/imports/x64/kernel32.lib"
++lld-link /lib /machine:x64 /def:"$BUILD_DIR/imports/x64/msvcrt.def" /out:"$BUILD_DIR/imports/x64/msvcrt.lib"
++
++COMMON=(
++  /nologo /c /O2 /Oi- /GS- /GR- /EHs-c- /Zl /Zc:threadSafeInit- /Brepro
++  /DWIN32 /DNDEBUG /D_WINDOWS /D_USRDLL /DCOLORMATRIX_EXPORTS
++  /DCOLORMATRIX_C_ONLY /DCOLORMATRIX_PORTABLE_BUILD /DCOLORMATRIX_NO_CPP_EXCEPTIONS
++  /I"$ROOT/build/compat" /I"$ROOT/colormatrix"
++  /clang:-fno-builtin
++  /clang:-Wno-microsoft-extra-qualification
++  /clang:-Wno-ignored-attributes
++)
++
++build_arch() {
++  local arch=$1 target=$2 machine=$3 entry=$4 output=$5
++  local obj="$BUILD_DIR/obj/$arch"
++  local imports="$BUILD_DIR/imports/$arch"
++
++  clang-cl --target="$target" "${COMMON[@]}" \
++    /Fo"$obj/ColorMatrix.obj" "$ROOT/colormatrix/ColorMatrix.cpp"
++  clang-cl --target="$target" "${COMMON[@]}" \
++    /Fo"$obj/portable_runtime.obj" "$ROOT/colormatrix/portable_runtime.cpp"
++
++  local aliases=()
++  if [[ "$arch" == "x86" ]]; then
++    # clang-cl decorates 32-bit stdcall dllimport symbols, while Windows PE
++    # import names are undecorated. Resolve local decorated references to the
++    # correct undecorated import-library symbols without changing the DLL's
++    # actual import table names.
++    aliases=(
++      '/alternatename:__imp__InterlockedIncrement@4=__imp__InterlockedIncrement'
++      '/alternatename:__imp__InterlockedDecrement@4=__imp__InterlockedDecrement'
++      '/alternatename:__imp__GetCurrentThreadId@0=__imp__GetCurrentThreadId'
++      '/alternatename:__imp__OutputDebugStringA@4=__imp__OutputDebugStringA'
++      '/alternatename:__imp__CreateEventA@16=__imp__CreateEventA'
++      '/alternatename:__imp__CreateThread@24=__imp__CreateThread'
++      '/alternatename:__imp__lstrcmpiA@8=__imp__lstrcmpiA'
++      '/alternatename:__imp__ResetEvent@4=__imp__ResetEvent'
++      '/alternatename:__imp__SetEvent@4=__imp__SetEvent'
++      '/alternatename:__imp__WaitForSingleObject@8=__imp__WaitForSingleObject'
++      '/alternatename:__imp__WaitForMultipleObjects@16=__imp__WaitForMultipleObjects'
++      '/alternatename:__imp__CloseHandle@4=__imp__CloseHandle'
++      '/alternatename:__imp__GetCurrentProcess@0=__imp__GetCurrentProcess'
++      '/alternatename:__imp__GetProcessAffinityMask@12=__imp__GetProcessAffinityMask'
++    )
++  fi
++
++  lld-link /dll /nodefaultlib /Brepro /opt:ref /opt:icf \
++    /machine:"$machine" /subsystem:windows /entry:"$entry" \
++    /out:"$output" /implib:"$obj/ColorMatrix.lib" \
++    "${aliases[@]}" \
++    "$obj/ColorMatrix.obj" "$obj/portable_runtime.obj" \
++    "$imports/kernel32.lib" "$imports/msvcrt.lib"
++}
++
++build_arch x86 i686-pc-windows-msvc x86 'DllMain@12' "$OUT_DIR/x86/colormatrix.dll"
++build_arch x64 x86_64-pc-windows-msvc x64 DllMain "$OUT_DIR/x64/ColorMatrix64.dll"
++
++sha256sum "$OUT_DIR/x86/colormatrix.dll" "$OUT_DIR/x64/ColorMatrix64.dll"
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/assert.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/assert.h
+--- original/ColorMatrix-master/build/compat/assert.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/assert.h	2026-08-06 21:32:27.729768201 +0000
+@@ -0,0 +1,4 @@
++#ifndef COLORMATRIX_COMPAT_ASSERT_H
++#define COLORMATRIX_COMPAT_ASSERT_H
++#define assert(x) ((void)0)
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/crtdbg.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/crtdbg.h
+--- original/ColorMatrix-master/build/compat/crtdbg.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/crtdbg.h	2026-08-06 21:32:27.729784335 +0000
+@@ -0,0 +1,11 @@
++#ifndef COLORMATRIX_COMPAT_CRTDBG_H
++#define COLORMATRIX_COMPAT_CRTDBG_H
++#define _CRT_WARN 0
++#define _RPT0(a,b) ((void)0)
++#define _RPT1(a,b,c) ((void)0)
++#define _RPT2(a,b,c,d) ((void)0)
++#define _RPT3(a,b,c,d,e) ((void)0)
++#define _RPT4(a,b,c,d,e,f) ((void)0)
++#define _ASSERT(x) ((void)0)
++#define _ASSERTE(x) ((void)0)
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/float.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/float.h
+--- original/ColorMatrix-master/build/compat/float.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/float.h	2026-08-06 21:32:27.729795080 +0000
+@@ -0,0 +1,4 @@
++#ifndef COLORMATRIX_COMPAT_FLOAT_H
++#define COLORMATRIX_COMPAT_FLOAT_H
++#define DBL_EPSILON 2.220446049250313080847263336181640625e-16
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/objbase.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/objbase.h
+--- original/ColorMatrix-master/build/compat/objbase.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/objbase.h	2026-08-06 21:32:27.729808210 +0000
+@@ -0,0 +1,3 @@
++#ifndef COLORMATRIX_COMPAT_OBJBASE_H
++#define COLORMATRIX_COMPAT_OBJBASE_H
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/process.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/process.h
+--- original/ColorMatrix-master/build/compat/process.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/process.h	2026-08-06 21:32:27.729820037 +0000
+@@ -0,0 +1,6 @@
++#ifndef COLORMATRIX_COMPAT_PROCESS_H
++#define COLORMATRIX_COMPAT_PROCESS_H
++#include <windef.h>
++typedef unsigned (__stdcall *CM_BEGINTHREAD_PROC)(void *);
++extern "C" __declspec(dllimport) ULONG_PTR __cdecl _beginthreadex(void *, unsigned, CM_BEGINTHREAD_PROC, void *, unsigned, unsigned *);
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/stdio.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/stdio.h
+--- original/ColorMatrix-master/build/compat/stdio.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/stdio.h	2026-08-06 21:32:28.174957140 +0000
+@@ -0,0 +1,19 @@
++#ifndef COLORMATRIX_COMPAT_STDIO_H
++#define COLORMATRIX_COMPAT_STDIO_H
++#include <windef.h>
++typedef struct _iobuf FILE;
++extern "C" {
++__declspec(dllimport) int __cdecl sprintf(char *, const char *, ...);
++__declspec(dllimport) int __cdecl sscanf(const char *, const char *, ...);
++__declspec(dllimport) FILE * __cdecl fopen(const char *, const char *);
++__declspec(dllimport) int __cdecl fclose(FILE *);
++__declspec(dllimport) char * __cdecl fgets(char *, int, FILE *);
++__declspec(dllimport) int __cdecl strncmp(const char *, const char *, SIZE_T);
++__declspec(dllimport) void * __cdecl malloc(SIZE_T);
++__declspec(dllimport) void * __cdecl calloc(SIZE_T, SIZE_T);
++__declspec(dllimport) void __cdecl free(void *);
++__declspec(dllimport) int __cdecl abs(int);
++__declspec(dllimport) void * __cdecl memset(void *, int, SIZE_T);
++__declspec(dllimport) void * __cdecl memcpy(void *, const void *, SIZE_T);
++}
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/windef.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windef.h
+--- original/ColorMatrix-master/build/compat/windef.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windef.h	2026-08-06 21:32:27.729840618 +0000
+@@ -0,0 +1,26 @@
++#ifndef COLORMATRIX_COMPAT_WINDEF_H
++#define COLORMATRIX_COMPAT_WINDEF_H
++#ifndef NULL
++#define NULL 0
++#endif
++typedef unsigned char BYTE;
++typedef unsigned short WORD;
++typedef unsigned long DWORD;
++typedef long LONG;
++typedef unsigned long ULONG;
++typedef int BOOL;
++typedef void *HANDLE;
++typedef void *HMODULE;
++typedef void *LPVOID;
++typedef const void *LPCVOID;
++typedef const char *LPCSTR;
++typedef char *LPSTR;
++typedef __SIZE_TYPE__ size_t;
++typedef __SIZE_TYPE__ SIZE_T;
++typedef __UINTPTR_TYPE__ ULONG_PTR;
++typedef ULONG_PTR DWORD_PTR;
++#ifndef TRUE
++#define TRUE 1
++#define FALSE 0
++#endif
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/windows.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windows.h
+--- original/ColorMatrix-master/build/compat/windows.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windows.h	2026-08-06 21:32:27.729850452 +0000
+@@ -0,0 +1,30 @@
++#ifndef COLORMATRIX_COMPAT_WINDOWS_H
++#define COLORMATRIX_COMPAT_WINDOWS_H
++#include <windef.h>
++#define WINAPI __stdcall
++#define INFINITE 0xFFFFFFFFUL
++#define max(a,b) (((a) > (b)) ? (a) : (b))
++#define min(a,b) (((a) < (b)) ? (a) : (b))
++#define UInt32x32To64(a,b) ((unsigned __int64)(unsigned long)(a) * (unsigned __int64)(unsigned long)(b))
++#define Int64ShrlMod32(a,b) ((unsigned __int64)(a) >> (b))
++typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
++extern "C" {
++__declspec(dllimport) DWORD WINAPI GetCurrentThreadId(void);
++__declspec(dllimport) void WINAPI OutputDebugStringA(LPCSTR);
++__declspec(dllimport) int WINAPI lstrcmpiA(LPCSTR, LPCSTR);
++__declspec(dllimport) HANDLE WINAPI CreateEventA(LPVOID, BOOL, BOOL, LPCSTR);
++__declspec(dllimport) HANDLE WINAPI CreateThread(LPVOID, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, DWORD *);
++__declspec(dllimport) BOOL WINAPI SetEvent(HANDLE);
++__declspec(dllimport) BOOL WINAPI ResetEvent(HANDLE);
++__declspec(dllimport) DWORD WINAPI WaitForSingleObject(HANDLE, DWORD);
++__declspec(dllimport) DWORD WINAPI WaitForMultipleObjects(DWORD, const HANDLE *, BOOL, DWORD);
++__declspec(dllimport) BOOL WINAPI CloseHandle(HANDLE);
++__declspec(dllimport) HANDLE WINAPI GetCurrentProcess(void);
++__declspec(dllimport) BOOL WINAPI GetProcessAffinityMask(HANDLE, DWORD_PTR *, DWORD_PTR *);
++__declspec(dllimport) LONG WINAPI InterlockedIncrement(LONG *);
++__declspec(dllimport) LONG WINAPI InterlockedDecrement(LONG *);
++}
++#define OutputDebugString OutputDebugStringA
++#define lstrcmpi lstrcmpiA
++#define CreateEvent CreateEventA
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/xmmintrin.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/xmmintrin.h
+--- original/ColorMatrix-master/build/compat/xmmintrin.h	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/xmmintrin.h	2026-08-06 21:32:27.729860487 +0000
+@@ -0,0 +1,3 @@
++#ifndef COLORMATRIX_COMPAT_XMMINTRIN_H
++#define COLORMATRIX_COMPAT_XMMINTRIN_H
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.cpp
+--- original/ColorMatrix-master/colormatrix/ColorMatrix.cpp	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.cpp	2026-08-06 21:32:28.715803041 +0000
+@@ -1,9 +1,9 @@
+ /*
+-**                 ColorMatrix v2.5 for Avisynth 2.5.x
++**                 ColorMatrix v2.6.1 for AviSynth
+ **
+ **   ColorMatrix 2.0 is based on the original ColorMatrix filter by Wilbert 
+ **   Dijkhof.  It adds the ability to convert between any of: Rec.709, FCC, 
+-**   Rec.601, and SMPTE 240M. It also makes pre and post clipping optional,
++**   Rec.601, SMPTE 240M, and Rec.2020. It also makes pre and post clipping optional,
+ **   adds range expansion/contraction, and more...
+ **
+ **   Copyright (C) 2006-2009 Kevin Stone
+@@ -60,6 +60,10 @@
+ 		else if (opt == 1) { cpu &= ~0x28; cpu |= 0x04; }
+ 		else if (opt == 2) cpu |= 0x2C;
+ 	}
++#ifdef COLORMATRIX_C_ONLY
++	/* The portable x86/x64 builds intentionally omit the legacy inline ASM. */
++	cpu = 0;
++#endif
+ 
+ 	css.cpu = cpu;
+ 	css.debug = debug;
+@@ -80,11 +84,11 @@
+     if (source == 4 || dest == 4)
+         css.cpu = 0;
+ 
+-	modei = source == dest ? -2 : source*4+dest;
++	modei = source == dest ? -2 : MATRIX_MODE_INDEX(source, dest);
+ 	if (debug)
+ 	{
+ 		sprintf(buf,"ColorMatrix:%u:  version %s (%s)\n", 
+-			GetCurrentThreadId(), VERSION, DATE);
++			(unsigned)GetCurrentThreadId(), VERSION, DATE);
+ 		OutputDebugString(buf);
+ 	}
+ 	if (hints)
+@@ -100,6 +104,9 @@
+ 	else child->SetCacheHints(CACHE_NOTHING, 0);
+ 	if (clamp&1) // clip input to 16-235/16-240 range
+ 	{
++#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
++		child = env->Invoke("Limiter", child).AsClip();
++#else
+ 		try
+ 		{
+ 			child = env->Invoke("Limiter", child).AsClip();
+@@ -112,13 +119,19 @@
+ 		{
+ 			env->ThrowError("ColorMatrix:  avisynth error invoking Limiter (%s)!", e.msg);
+ 		}
++#endif
+ 	}
+ 	if (interlaced)
+ 	{
+ 		if (child->GetVideoInfo().IsFieldBased())
+ 			env->ThrowError("ColorMatrix:  input must be framebased for interlaced=true " \
+ 				"processing (use AssumeFrameBased())!");
+-		try 
++#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
++		child = env->Invoke("InternalCache", child).AsClip();
++		child->SetCacheHints(CACHE_RANGE, 1);
++		child = env->Invoke("SeparateFields", child).AsClip();
++#else
++		try
+ 		{
+ 			child = env->Invoke("InternalCache", child).AsClip();
+ 			child->SetCacheHints(CACHE_RANGE, 1);
+@@ -134,6 +147,7 @@
+ 			env->ThrowError("ColorMatrix:  avisynth error invoking" \
+ 				" InternalCache and SeparateFields (%s)!", e.msg);
+ 		}
++#endif
+ 		vi.num_frames *= 2;
+ 		vi.fps_numerator *= 2;
+ 		vi.height >>= 1;
+@@ -160,7 +174,7 @@
+ 		if (debug)
+ 		{
+ 			sprintf(buf,"ColorMatrix:%u:  number of detected processors = %d\n", 
+-				GetCurrentThreadId(), threads);
++				(unsigned)GetCurrentThreadId(), threads);
+ 			OutputDebugString(buf);
+ 		}
+ 	}
+@@ -195,9 +209,15 @@
+ 		}
+ 		pssInfo[i]->jobFinished = CreateEvent(NULL, TRUE, TRUE, NULL);
+ 		pssInfo[i]->nextJob = CreateEvent(NULL, TRUE, FALSE, NULL);
+-		thds[i] = vi.IsYUY2() ? 
++#ifdef COLORMATRIX_PORTABLE_BUILD
++		thds[i] = vi.IsYUY2() ?
++			CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&processFrame_YUY2, (void*)(pssInfo[i]), 0, (DWORD*)&tids[i]) :
++			CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&processFrame_YV12, (void*)(pssInfo[i]), 0, (DWORD*)&tids[i]);
++#else
++		thds[i] = vi.IsYUY2() ?
+ 			(HANDLE)_beginthreadex(0,0,&processFrame_YUY2,(void*)(pssInfo[i]),0,&tids[i]) :
+ 			(HANDLE)_beginthreadex(0,0,&processFrame_YV12,(void*)(pssInfo[i]),0,&tids[i]);
++#endif
+ 	}
+ }
+ 
+@@ -229,7 +249,7 @@
+ int num_processors()
+ {
+ 	int pcount = 0;
+-	DWORD p_aff, s_aff;
++	DWORD_PTR p_aff, s_aff;
+ 	GetProcessAffinityMask(GetCurrentProcess(), &p_aff, &s_aff);
+ 	for(; p_aff != 0; p_aff>>=1) 
+ 		pcount += (p_aff&1);
+@@ -263,7 +283,7 @@
+ 			{
+ 				char buf[256];
+ 				sprintf(buf,"ColorMatrix:%u:  frame %d:  YUY2 range conversion only.\n", 
+-					GetCurrentThreadId(), pss->cs->n);
++					(unsigned)GetCurrentThreadId(), pss->cs->n);
+ 				OutputDebugString(buf);
+ 			}
+ 			const int *ylut = pss->ylut;
+@@ -287,7 +307,7 @@
+ 			{
+ 				char buf[256];
+ 				sprintf(buf,"ColorMatrix:%u:  frame %d:  using YUY2 %s conversion.\n", 
+-					GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
++					(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+ 				OutputDebugString(buf);
+ 			}
+ 			const int c1 = pss->cs->c1;
+@@ -335,7 +355,7 @@
+ 			{
+ 				char buf[256];
+ 				sprintf(buf,"ColorMatrix:%u:  frame %d:  YV12 range conversion only.\n", 
+-					GetCurrentThreadId(), pss->cs->n);
++					(unsigned)GetCurrentThreadId(), pss->cs->n);
+ 				OutputDebugString(buf);
+ 			}
+ 			for (int b=0; b<3; ++b)
+@@ -379,14 +399,15 @@
+ 			const int src_pitch = pss->src_pitch;
+ 			const int dst_pitch = pss->dst_pitch;
+ 			const int c1 = pss->cs->c1;
+-			if (c1 == 65536 && (cpu&CPUF_SSE2) && 
+-				!((int(srcp)|int(dstp)|widtha|dst_pitch|src_pitch)&15)) 
++#ifndef COLORMATRIX_C_ONLY
++			if (c1 == 65536 && (cpu&CPUF_SSE2) &&
++				!((ULONG_PTR(srcp)|ULONG_PTR(dstp)|widtha|dst_pitch|src_pitch)&15))
+ 			{
+ 				if (debug)
+ 				{
+ 					char buf[256];
+ 					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (SSE2).\n", 
+-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
++						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+ 					OutputDebugString(buf);
+ 				}
+ 				(find_YV12_SIMD(pss->cs->modef, true))(ps);
+@@ -397,18 +418,19 @@
+ 				{
+ 					char buf[256];
+ 					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (MMX).\n", 
+-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
++						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+ 					OutputDebugString(buf);
+ 				}
+ 				(find_YV12_SIMD(pss->cs->modef, false))(ps);
+ 			}
+ 			else
++#endif
+ 			{
+ 				if (debug)
+ 				{
+ 					char buf[256];
+-					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (C).\n", 
+-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
++					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (C).\n",
++						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+ 					OutputDebugString(buf);
+ 				}
+ 				const unsigned char *srcpU = pss->srcpU;
+@@ -468,7 +490,7 @@
+ 		if (debug)
+ 		{
+ 			sprintf(buf,"ColorMatrix:%u:  frame %d:  detected colorimetry from d2v = %d (%s)\n", 
+-				GetCurrentThreadId(), n, temp, CTS(temp));
++				(unsigned)GetCurrentThreadId(), n, temp, CTS(temp));
+ 			OutputDebugString(buf);
+ 		}
+ 		modef = findMode(temp);
+@@ -477,7 +499,7 @@
+ 			if (debug)
+ 			{
+ 				sprintf(buf,"ColorMatrix:%u:  frame %d:  returning src frame... no conversion " \
+-					"required (d2v)\n", GetCurrentThreadId(), n);
++					"required (d2v)\n", (unsigned)GetCurrentThreadId(), n);
+ 				OutputDebugString(buf);
+ 			}
+ 			return src;
+@@ -495,7 +517,7 @@
+ 		if (debug)
+ 		{
+ 			sprintf(buf,"ColorMatrix:%u:  frame %d:  detected hint = %d (%s)\n", 
+-				GetCurrentThreadId(), n, temp, CTS(temp));
++				(unsigned)GetCurrentThreadId(), n, temp, CTS(temp));
+ 			OutputDebugString(buf);
+ 		}
+ 		modef = findMode(temp);
+@@ -504,7 +526,7 @@
+ 			if (debug)
+ 			{
+ 				sprintf(buf,"ColorMatrix:%u:  frame %d:  returning src frame... no conversion " \
+-					"required (hints)\n", GetCurrentThreadId(), n);
++					"required (hints)\n", (unsigned)GetCurrentThreadId(), n);
+ 				OutputDebugString(buf);
+ 			}
+ 			return src;
+@@ -519,6 +541,8 @@
+ 	const int dst_height = dst->GetHeight();
+ 	if (modef >= 0)
+ 	{
++		if (modef >= YUV_CONVERSION_COUNT)
++			env->ThrowError("ColorMatrix: internal conversion mode index is out of range!");
+ 		css.c1 = yuv_convert[modef][0][0];
+ 		css.c2 = yuv_convert[modef][0][1];
+ 		css.c3 = yuv_convert[modef][0][2]; 
+@@ -682,14 +706,18 @@
+ 
+ int ColorMatrix::findMode(int color)
+ {
+-	if (color == 1 && dest != 0) 
+-		return dest;
+-	else if (color == 4 && dest != 1)
+-		return 4+dest;
+-	else if ((color == 5 || color == 6) && dest != 2)
+-		return 8+dest;
+-	else if (color == 7 && dest != 3)
+-		return 12+dest;
++	int detectedSource = -1;
++	if (color == 1)
++		detectedSource = 0; // Rec.709
++	else if (color == 4)
++		detectedSource = 1; // FCC
++	else if (color == 5 || color == 6)
++		detectedSource = 2; // Rec.601 / SMPTE 170M
++	else if (color == 7)
++		detectedSource = 3; // SMPTE 240M
++
++	if (detectedSource >= 0 && detectedSource != dest)
++		return MATRIX_MODE_INDEX(detectedSource, dest);
+ 	if (inputFR != outputFR)
+ 		return -2;
+ 	return -1;
+@@ -697,29 +725,39 @@
+ 
+ void (*find_YV12_SIMD(int modef, bool sse2))(void *ps)
+ {
+-	if (modef == 1 || modef == 2 || modef == 3 || 
+-		modef == 13 || modef == 14)
++#ifdef COLORMATRIX_C_ONLY
++	(void)modef;
++	(void)sse2;
++	return NULL;
++#else
++	/*
++	 * These groups are the original four mathematical SIMD kernels remapped
++	 * to the five-wide table introduced with Rec.2020 support.
++	 */
++	if (modef == 1 || modef == 2 || modef == 3 ||
++		modef == 16 || modef == 17)
+ 	{
+ 		if (sse2) return &conv1_YV12_SSE2;
+ 		return &conv1_YV12_MMX;
+ 	}
+-	else if (modef == 4 || modef == 7 || modef == 8 || 
+-		modef == 11 || modef == 12)
++	else if (modef == 5 || modef == 8 || modef == 10 ||
++		modef == 13 || modef == 15)
+ 	{
+ 		if (sse2) return &conv2_YV12_SSE2;
+ 		return &conv2_YV12_MMX;
+ 	}
+-	else if (modef == 6)
++	else if (modef == 7)
+ 	{
+ 		if (sse2) return &conv3_YV12_SSE2;
+ 		return &conv3_YV12_MMX;
+ 	}
+-	else if (modef == 9)
++	else if (modef == 11)
+ 	{
+ 		if (sse2) return &conv4_YV12_SSE2;
+ 		return &conv4_YV12_MMX;
+ 	}
+ 	return NULL;
++#endif
+ }
+ 
+ int ColorMatrix::parseD2V(const char *d2v)
+@@ -935,7 +973,7 @@
+ 		yuv_coeff[i][2][2] = (1.0-yuv_coeff[i][0][2])*rscale;
+ 	}
+     double rgb_coeffd[YUV_COEFFS_LUMA_COUNT][3][3];
+-    double yuv_convertd[YUV_COEFFS_LUMA_COUNT * YUV_COEFFS_LUMA_COUNT][3][3];
++    double yuv_convertd[YUV_CONVERSION_COUNT][3][3];
+     for (int i = 0; i<YUV_COEFFS_LUMA_COUNT; ++i)
+ 		inverse3x3(rgb_coeffd[i], yuv_coeff[i]);
+ 	double yiscale = 1.0/255.0, uviscale = 1.0/255.0;
+@@ -999,6 +1037,9 @@
+ 		args[12].AsInt(0),args[13].AsInt(3),env);
+ 	if (interlaced) // interlaced
+ 	{
++#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
++		return_clip = env->Invoke("Weave", return_clip).AsClip();
++#else
+ 		try
+ 		{
+ 			return_clip = env->Invoke("Weave", return_clip).AsClip();
+@@ -1007,13 +1048,17 @@
+ 		{
+ 			env->ThrowError("ColorMatrix:  error invoking Weave (not found)!");
+ 		}
+-		catch (AvisynthError e) 
++		catch (AvisynthError e)
+ 		{
+ 			env->ThrowError("ColorMatrix:  avisynth error invoking Weave (%s)!", e.msg);
+ 		}
++#endif
+ 	}
+ 	if (clamp>1) // clip output to 16-235/16-240 range
+ 	{
++#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
++		return_clip = env->Invoke("Limiter", return_clip).AsClip();
++#else
+ 		try
+ 		{
+ 			return_clip = env->Invoke("Limiter", return_clip).AsClip();
+@@ -1026,6 +1071,7 @@
+ 		{
+ 			env->ThrowError("ColorMatrix:  avisynth error invoking Limiter (%s)!", e.msg);
+ 		}
++#endif
+ 	}
+ 	return return_clip;
+ }
+@@ -1036,4 +1082,20 @@
+ 		"[inputFR]b[outputFR]b[hints]b[d2v]s[debug]b[threads]i[thrdmthd]i[opt]i", 
+ 		Create_ColorMatrix, 0);
+     return 0;
+-}
+\ No newline at end of file
++}
++#ifdef COLORMATRIX_PORTABLE_BUILD
++/*
++ * Build-only API3 entry point for the portable x86/x64 reference binaries.
++ * The user-provided upstream snapshot contains an AviSynth 2.5-era header,
++ * so the linkage pointer is retained as an opaque value rather than consumed
++ * by that header.  Hybrid users should prefer the ABI-preserving patched
++ * binaries in the separate binary release.
++ */
++static const void *volatile ColorMatrix_AVS_linkage = 0;
++extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
++	IScriptEnvironment* env, const void* vectors)
++{
++	ColorMatrix_AVS_linkage = vectors;
++	return AvisynthPluginInit2(env);
++}
++#endif
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.h
+--- original/ColorMatrix-master/colormatrix/ColorMatrix.h	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.h	2026-08-06 21:32:27.728651793 +0000
+@@ -1,9 +1,9 @@
+ /*
+-**                 ColorMatrix v2.5 for Avisynth 2.5.x
++**                 ColorMatrix v2.6.1 for AviSynth
+ **
+ **   ColorMatrix 2.0 is based on the original ColorMatrix filter by Wilbert 
+ **   Dijkhof.  It adds the ability to convert between any of: Rec.709, FCC, 
+-**   Rec.601, and SMPTE 240M. It also makes pre and post clipping optional,
++**   Rec.601, SMPTE 240M, and Rec.2020. It also makes pre and post clipping optional,
+ **   adds range expansion/contraction, and more...
+ **
+ **   Copyright (C) 2006-2009 Kevin Stone
+@@ -32,8 +32,8 @@
+ #include <float.h>
+ #include "avisynth.h"
+ 
+-#define VERSION "2.6"
+-#define DATE "02/22/2018"
++#define VERSION "2.6.1"
++#define DATE "08/06/2026"
+ 
+ #define MAGIC_NUMBER 0xdeadbeef
+ #define COLORIMETRY 0x0000001C
+@@ -45,25 +45,33 @@
+ 				n == 7 ? "SMPTE 240M" : \
+ 				n == -1 ? "no hint found" : \
+ 				"unknown"
+-#define CTS2(n) n == 1 ? "Rec.709->FCC" : \
+-				n == 2 ? "Rec.709->Rec.601" : \
+-				n == 3 ? "Rec.709->SMPTE 240M" : \
+-				n == 4 ? "FCC->Rec.709" : \
+-				n == 6 ? "FCC->Rec.601" : \
+-				n == 7 ? "FCC->SMPTE 240M" : \
+-				n == 8 ? "Rec.601->Rec.709" : \
+-				n == 9 ? "Rec.601->FCC" : \
+-				n == 11 ? "Rec.601->SMPTE 240M" : \
+-				n == 12 ? "SMPTE 240M->Rec.709" : \
+-				n == 13 ? "SMPTE 240M->FCC" : \
+-				n == 14 ? "SMPTE 240M->Rec.601" : \
+-				"unknown"
++#define YUV_COEFFS_LUMA_COUNT 5
++#define YUV_CONVERSION_COUNT (YUV_COEFFS_LUMA_COUNT * YUV_COEFFS_LUMA_COUNT)
++#define MATRIX_MODE_INDEX(source, dest) ((source) * YUV_COEFFS_LUMA_COUNT + (dest))
++
++/*
++ * Keep diagnostic mode names in the same five-wide, row-major order as
++ * yuv_convert.  ColorMatrix 2.6 retained the old four-wide diagnostic table
++ * when Rec.2020 was added, which hid the stale source*4+dest indexing bug.
++ */
++static const char *const yuv_conversion_names[YUV_CONVERSION_COUNT] =
++{
++	"Rec.709->Rec.709", "Rec.709->FCC", "Rec.709->Rec.601", "Rec.709->SMPTE 240M", "Rec.709->Rec.2020",
++	"FCC->Rec.709", "FCC->FCC", "FCC->Rec.601", "FCC->SMPTE 240M", "FCC->Rec.2020",
++	"Rec.601->Rec.709", "Rec.601->FCC", "Rec.601->Rec.601", "Rec.601->SMPTE 240M", "Rec.601->Rec.2020",
++	"SMPTE 240M->Rec.709", "SMPTE 240M->FCC", "SMPTE 240M->Rec.601", "SMPTE 240M->SMPTE 240M", "SMPTE 240M->Rec.2020",
++	"Rec.2020->Rec.709", "Rec.2020->FCC", "Rec.2020->Rec.601", "Rec.2020->SMPTE 240M", "Rec.2020->Rec.2020"
++};
++
++static const char *ColorMatrixConversionName(int mode)
++{
++	return mode >= 0 && mode < YUV_CONVERSION_COUNT ? yuv_conversion_names[mode] : "unknown";
++}
++#define CTS2(n) ColorMatrixConversionName(n)
+ #define ns(n) n < 0 ? int(n*65536.0-0.5+DBL_EPSILON) : int(n*65536.0+0.5)
+ #define CB(n) max(min((n),255),0)
+ #define simd_scale(n) n >= 65536 ? (n+2)>>2 : n >= 32768 ? (n+1)>>1 : n;
+ 
+-#define YUV_COEFFS_LUMA_COUNT 5
+-
+ static double yuv_coeffs_luma[YUV_COEFFS_LUMA_COUNT][3] =
+ { 
+   +0.7152, +0.0722, +0.2126, // Rec.709 (0)
+@@ -118,7 +126,7 @@
+ {
+ private:
+ 	char buf[256];
+-    int yuv_convert[YUV_COEFFS_LUMA_COUNT * YUV_COEFFS_LUMA_COUNT][3][3];
++    int yuv_convert[YUV_CONVERSION_COUNT][3][3];
+ 	const char *mode, *d2v;
+ 	unsigned char *d2vArray;
+ 	bool hints, interlaced, debug;
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.rc /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.rc
+--- original/ColorMatrix-master/colormatrix/ColorMatrix.rc	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.rc	2026-08-06 21:41:01.591842270 +0000
+@@ -51,8 +51,8 @@
+ //
+ 
+ VS_VERSION_INFO VERSIONINFO
+- FILEVERSION 2,6,0,0
+- PRODUCTVERSION 2,6,0,0
++ FILEVERSION 2,6,1,0
++ PRODUCTVERSION 2,6,1,0
+  FILEFLAGSMASK 0x17L
+ #ifdef _DEBUG
+  FILEFLAGS 0x1L
+@@ -67,10 +67,10 @@
+     BEGIN
+         BLOCK "040904b0"
+         BEGIN
+-            VALUE "FileDescription", "ColorMatrix v2.6 for Avisynth 2.5"
+-            VALUE "FileVersion", "2.6.0.0"
++            VALUE "FileDescription", "ColorMatrix v2.6.1 for AviSynth"
++            VALUE "FileVersion", "2.6.1.0"
+             VALUE "LegalCopyright", "Copyright (C) 2006-2018  Kevin Stone, SoraYuki"
+-            VALUE "ProductVersion", "2.6.0.0"
++            VALUE "ProductVersion", "2.6.1.0"
+         END
+     END
+     BLOCK "VarFileInfo"
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix_ASM.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix_ASM.cpp
+--- original/ColorMatrix-master/colormatrix/ColorMatrix_ASM.cpp	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix_ASM.cpp	2026-08-06 21:41:01.592013924 +0000
+@@ -1,5 +1,5 @@
+ /*
+-**                 ColorMatrix v2.5 for Avisynth 2.5.x
++**                 ColorMatrix v2.6.1 for AviSynth
+ **
+ **   ColorMatrix 2.0 is based on the original ColorMatrix filter by Wilbert 
+ **   Dijkhof.  It adds the ability to convert between any of: Rec.709, FCC, 
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/avisynth.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/avisynth.h
+--- original/ColorMatrix-master/colormatrix/avisynth.h	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/avisynth.h	2026-08-06 21:32:27.728754745 +0000
+@@ -337,7 +337,7 @@
+   VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height);
+   VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height, int _offsetU, int _offsetV, int _pitchUV);
+ 
+-  void* operator new(unsigned size);
++  void* operator new(size_t size);
+ // TESTME: OFFSET U/V may be switched to what could be expected from AVI standard!
+ public:
+   int GetPitch() const { return pitch; }
+@@ -565,9 +565,11 @@
+       src->clip->AddRef();
+     if (!init && IsClip() && clip)
+       clip->Release();
+-    // make sure this copies the whole struct!
+-    ((__int32*)this)[0] = ((__int32*)src)[0];
+-    ((__int32*)this)[1] = ((__int32*)src)[1];
++    // Copy fields explicitly.  The historical two-DWORD copy truncates the
++    // union member on 64-bit builds.
++    type = src->type;
++    array_size = src->array_size;
++    clip = src->clip;
+   }
+ };
+ 
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/portable_runtime.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/portable_runtime.cpp
+--- original/ColorMatrix-master/colormatrix/portable_runtime.cpp	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/portable_runtime.cpp	2026-08-06 21:32:27.728827964 +0000
+@@ -0,0 +1,43 @@
++/*
++ * Minimal runtime glue for the reproducible LLVM cross-build in build/.
++ * This file is only used when COLORMATRIX_PORTABLE_BUILD is defined.
++ */
++#include <windows.h>
++#include <stdio.h>
++
++extern "C" int _fltused = 0;
++
++void *operator new(size_t size)
++{
++    return malloc(size ? size : 1);
++}
++
++void *operator new[](size_t size)
++{
++    return malloc(size ? size : 1);
++}
++
++void operator delete(void *ptr)
++{
++    free(ptr);
++}
++
++void operator delete[](void *ptr)
++{
++    free(ptr);
++}
++
++void operator delete(void *ptr, size_t)
++{
++    free(ptr);
++}
++
++void operator delete[](void *ptr, size_t)
++{
++    free(ptr);
++}
++
++extern "C" BOOL WINAPI DllMain(HMODULE, DWORD, LPVOID)
++{
++    return TRUE;
++}
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix.htm /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix.htm
+--- original/ColorMatrix-master/colormatrix.htm	2018-02-22 08:16:56.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix.htm	2026-08-06 21:32:27.724354603 +0000
+@@ -59,11 +59,11 @@
+ </HEAD>
+ <BODY>
+ 
+-<h1>ColorMatrix v2.5</h1>
++<h1>ColorMatrix v2.6.1</h1>
+ <h2>Abstract</h2>
+ <ul>
+ <b>author:</b>    tritical, SoraYuki
+-<br><b>version:</b> v2.5<br>
++<br><b>version:</b> v2.6.1<br>
+ <b>download:</b>   <a href="http://bengal.missouri.edu/~kes25c/">http://bengal.missouri.edu/~kes25c/</a>
+ <br><b>category:</b>   Misc Plugins
+ <br><b>requirements:</b>&nbsp;
+@@ -424,7 +424,14 @@
+ 
+ <h2>Changelog</h2>
+ <ul>
+-<p>v2.6, 22th February 2018<br>
++<p>v2.6.1, 6th August 2026<br>
++  - Fixed the five-wide conversion-table indexing introduced when Rec.2020 support was added.<br>
++  - Fixed d2v/hint conversion indexing for the five-matrix table.<br>
++  - Remapped legacy MMX/SSE2 dispatch mode numbers to the five-wide table.<br>
++  - Fixed conversion-name diagnostics for all 25 source/destination pairs.<br>
++  - Added bounds checking and 64-bit-safe compatibility fixes.<br>
++</p>
++<p>v2.6, 22nd February 2018<br>
+   + Add Rec.2020 support (without ASM optimization)
+ </p>
+ <p>v2.5, 25th January 2009<br>
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tests/test_mode_index.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_mode_index.py
+--- original/ColorMatrix-master/tests/test_mode_index.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_mode_index.py	2026-08-06 21:32:28.834092656 +0000
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import re
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++CPP = (ROOT / "colormatrix" / "ColorMatrix.cpp").read_text(encoding="utf-8")
++HEADER = (ROOT / "colormatrix" / "ColorMatrix.h").read_text(encoding="utf-8")
++
++
++def mode(source: int, dest: int) -> int:
++    return source * 5 + dest
++
++
++def main() -> int:
++    indices = [mode(source, dest) for source in range(5) for dest in range(5)]
++    assert indices == list(range(25))
++    assert mode(2, 0) == 10  # Rec.601 -> Rec.709
++    assert mode(1, 3) == 8   # FCC -> SMPTE 240M
++
++    assert "MATRIX_MODE_INDEX(source, dest)" in CPP
++    assert "source*4+dest" not in CPP.replace(" ", "")
++    assert "return 4+dest" not in CPP.replace(" ", "")
++    assert "return 8+dest" not in CPP.replace(" ", "")
++    assert "return 12+dest" not in CPP.replace(" ", "")
++    assert "YUV_CONVERSION_COUNT" in HEADER
++
++    # Verify the four legacy SIMD kernels were remapped to five-wide indices.
++    expected_groups = [
++        {1, 2, 3, 16, 17},
++        {5, 8, 10, 13, 15},
++        {7},
++        {11},
++    ]
++    body = CPP[CPP.index("void (*find_YV12_SIMD"):CPP.index("int ColorMatrix::parseD2V")]
++    numbers = [set(map(int, re.findall(r"modef == (\d+)", block)))
++               for block in re.split(r"else if", body)[:4]]
++    assert numbers == expected_groups, numbers
++
++    print("source indexing tests: PASS")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tests/test_patched_pe.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_patched_pe.py
+--- original/ColorMatrix-master/tests/test_patched_pe.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_patched_pe.py	2026-08-06 21:32:28.835314209 +0000
+@@ -0,0 +1,41 @@
++#!/usr/bin/env python3
++"""Static checks for binaries produced by tools/patch_hybrid_binaries.py."""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import struct
++from pathlib import Path
++
++EXPECTED = {
++    "x86": "597325ad1ef1d19a90c317a86789282ec3f400a5fb77ebea0ba7b524f5a97307",
++    "x64": "bca02c5400a753ebce3924515d74160140c16650369c76d60af47feeae8641b9",
++}
++
++
++def sha(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def machine(path: Path) -> int:
++    data = path.read_bytes()
++    pe = struct.unpack_from("<I", data, 0x3C)[0]
++    assert data[pe:pe + 4] == b"PE\0\0"
++    return struct.unpack_from("<H", data, pe + 4)[0]
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--x86", type=Path, required=True)
++    ap.add_argument("--x64", type=Path, required=True)
++    args = ap.parse_args()
++    assert sha(args.x86) == EXPECTED["x86"]
++    assert sha(args.x64) == EXPECTED["x64"]
++    assert machine(args.x86) == 0x014C
++    assert machine(args.x64) == 0x8664
++    print("patched PE tests: PASS")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tools/patch_hybrid_binaries.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tools/patch_hybrid_binaries.py
+--- original/ColorMatrix-master/tools/patch_hybrid_binaries.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tools/patch_hybrid_binaries.py	2026-08-06 21:32:28.837007229 +0000
+@@ -0,0 +1,199 @@
++#!/usr/bin/env python3
++"""Patch Hybrid's supplied ColorMatrix 2.6 DLLs for five-wide matrix indexing.
++
++This script only accepts the exact x86/x64 DLLs analyzed for this release.  It
++verifies SHA-256 hashes and every instruction sequence before changing bytes.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import struct
++from dataclasses import dataclass
++from pathlib import Path
++
++X86_SHA256 = "3d042d59df206cd45586348c72d2458dee6e5dd2fc5c8540916245da1a7c8ec2"
++X64_SHA256 = "654454449f992122bfae5671003491db67212ee6b15fe0975f81b8b47223fedf"
++
++
++@dataclass(frozen=True)
++class Section:
++    name: str
++    virtual_address: int
++    virtual_size: int
++    raw_offset: int
++    raw_size: int
++    header_offset: int
++
++
++class PEImage:
++    def __init__(self, data: bytearray) -> None:
++        self.data = data
++        if data[:2] != b"MZ":
++            raise ValueError("not an MZ executable")
++        self.pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
++        if data[self.pe_offset:self.pe_offset + 4] != b"PE\0\0":
++            raise ValueError("not a PE image")
++        coff = self.pe_offset + 4
++        self.machine, section_count = struct.unpack_from("<HH", data, coff)
++        optional_size = struct.unpack_from("<H", data, coff + 16)[0]
++        section_table = self.pe_offset + 24 + optional_size
++        sections: list[Section] = []
++        for i in range(section_count):
++            off = section_table + 40 * i
++            name = bytes(data[off:off + 8]).rstrip(b"\0").decode("ascii", "replace")
++            virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from("<IIII", data, off + 8)
++            sections.append(Section(name, virtual_address, virtual_size, raw_offset, raw_size, off))
++        self.sections = sections
++
++    def section(self, name: str) -> Section:
++        for section in self.sections:
++            if section.name == name:
++                return section
++        raise ValueError(f"PE section {name!r} not found")
++
++    def rva_to_offset(self, rva: int) -> int:
++        for section in self.sections:
++            span = max(section.virtual_size, section.raw_size)
++            if section.virtual_address <= rva < section.virtual_address + span:
++                return section.raw_offset + (rva - section.virtual_address)
++        raise ValueError(f"RVA 0x{rva:X} does not map to a section")
++
++    def expect_rva(self, rva: int, expected: bytes) -> int:
++        off = self.rva_to_offset(rva)
++        actual = bytes(self.data[off:off + len(expected)])
++        if actual != expected:
++            raise ValueError(
++                f"unexpected bytes at RVA 0x{rva:X}:\n"
++                f"  expected {expected.hex(' ')}\n"
++                f"  actual   {actual.hex(' ')}"
++            )
++        return off
++
++    def patch_rva(self, rva: int, expected: bytes, replacement: bytes) -> None:
++        if len(expected) != len(replacement):
++            raise ValueError("in-place patch length mismatch")
++        off = self.expect_rva(rva, expected)
++        self.data[off:off + len(replacement)] = replacement
++
++
++def sha256(data: bytes | bytearray) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def rel32(instruction_rva: int, target_rva: int) -> bytes:
++    displacement = target_rva - (instruction_rva + 5)
++    if not -(1 << 31) <= displacement < (1 << 31):
++        raise ValueError("relative jump is out of range")
++    return struct.pack("<i", displacement)
++
++
++def patch_x64(data: bytearray) -> bytearray:
++    if sha256(data) != X64_SHA256:
++        raise ValueError("x64 input SHA-256 does not match the supported Hybrid ColorMatrix64.dll")
++    pe = PEImage(data)
++    if pe.machine != 0x8664:
++        raise ValueError("x64 input is not an AMD64 PE image")
++
++    # Constructor: source == dest ? -2 : source * 5 + dest.
++    original = bytes.fromhex(
++        "3b c2 75 0d 41 c7 86 f8 04 00 00 fe ff ff ff "
++        "eb 0a 8d 04 82 41 89 86 f8 04 00 00"
++    )
++    fixed = bytes.fromhex(
++        "39 d0 74 07 "          # cmp eax,edx / je equal
++        "6b c0 05 "             # imul eax,eax,5
++        "01 d0 "                # add eax,edx
++        "eb 05 "                # jmp store
++        "b8 fe ff ff ff "       # equal: mov eax,-2
++        "41 89 86 f8 04 00 00 " # store: mov [r14+0x4f8],eax
++        "90 90 90 90"
++    )
++    pe.patch_rva(0x3145, original, fixed)
++
++    # findMode(): old four-wide row offsets -> five-wide row offsets.
++    pe.patch_rva(0x727F, bytes.fromhex("83 c0 08"), bytes.fromhex("83 c0 0a"))
++    pe.patch_rva(0x72AF, bytes.fromhex("83 c0 0c"), bytes.fromhex("83 c0 0f"))
++    pe.patch_rva(0x72BE, bytes.fromhex("83 c0 04"), bytes.fromhex("83 c0 05"))
++    return data
++
++
++def patch_x86(data: bytearray) -> bytearray:
++    if sha256(data) != X86_SHA256:
++        raise ValueError("x86 input SHA-256 does not match the supported Hybrid colormatrix.dll")
++    pe = PEImage(data)
++    if pe.machine != 0x014C:
++        raise ValueError("x86 input is not an i386 PE image")
++
++    constructor_rva = 0x4161
++    return_rva = 0x4175
++    cave_rva = 0x11200
++
++    original = bytes.fromhex(
++        "3b d0 75 07 b8 fe ff ff ff eb 03 8d 04 90 "
++        "89 81 e0 04 00 00"
++    )
++    constructor_patch = b"\xE9" + rel32(constructor_rva, cave_rva) + b"\x90" * (len(original) - 5)
++    pe.patch_rva(constructor_rva, original, constructor_patch)
++
++    cave = (
++        bytes.fromhex(
++            "39 c2 74 07 "          # cmp edx,eax / je equal
++            "8d 04 90 "             # lea eax,[eax+edx*4]
++            "01 d0 "                # add eax,edx (source*5 + dest)
++            "eb 05 "                # jmp store
++            "b8 fe ff ff ff "       # equal: mov eax,-2
++            "89 81 e0 04 00 00 "    # store: mov [ecx+0x4e0],eax
++            "e9"
++        )
++        + rel32(cave_rva + 22, return_rva)
++    )
++    cave_off = pe.expect_rva(cave_rva, b"\0" * len(cave))
++    pe.data[cave_off:cave_off + len(cave)] = cave
++
++    # Extend .text's mapped virtual size to include the code cave. The raw
++    # section already contains sufficient zero-filled space.
++    text = pe.section(".text")
++    required_virtual_size = cave_rva + len(cave) - text.virtual_address
++    if required_virtual_size > text.raw_size:
++        raise ValueError("x86 code cave exceeds .text raw section")
++    if text.virtual_size != 0x101E6:
++        raise ValueError(f"unexpected original .text VirtualSize 0x{text.virtual_size:X}")
++    struct.pack_into("<I", pe.data, text.header_offset + 8, required_virtual_size)
++
++    # findMode() is inlined twice in this build.
++    for rva in (0x125F, 0x22C2):
++        pe.patch_rva(rva, bytes.fromhex("83 45 ec 08"), bytes.fromhex("83 45 ec 0a"))
++    for rva in (0x1D77, 0x23F7):
++        pe.patch_rva(rva, bytes.fromhex("83 45 ec 0c"), bytes.fromhex("83 45 ec 0f"))
++    for rva in (0x1D95, 0x2415):
++        pe.patch_rva(rva, bytes.fromhex("83 45 ec 04"), bytes.fromhex("83 45 ec 05"))
++    return data
++
++
++def patch_file(kind: str, source: Path, destination: Path) -> None:
++    data = bytearray(source.read_bytes())
++    patched = patch_x86(data) if kind == "x86" else patch_x64(data)
++    destination.parent.mkdir(parents=True, exist_ok=True)
++    destination.write_bytes(patched)
++    print(f"{kind}: {source.name} -> {destination}")
++    print(f"  SHA-256: {sha256(patched)}")
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--x86", type=Path, help="original Hybrid colormatrix.dll")
++    parser.add_argument("--x64", type=Path, help="original Hybrid ColorMatrix64.dll")
++    parser.add_argument("--out-dir", type=Path, required=True)
++    args = parser.parse_args()
++    if not args.x86 and not args.x64:
++        parser.error("at least one of --x86 or --x64 is required")
++    if args.x86:
++        patch_file("x86", args.x86, args.out_dir / "x86" / "colormatrix.dll")
++    if args.x64:
++        patch_file("x64", args.x64, args.out_dir / "x64" / "ColorMatrix64.dll")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

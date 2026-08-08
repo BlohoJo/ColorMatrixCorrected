@@ -1,0 +1,2 @@
+c8109af3a1ef32bc6fbd9062f60ef56b2136e4e259be442952f7056fdd125395  bin/source-build/x86/colormatrix.dll
+518e764ea7ff58b3831c5b87a9afcfec9804e5d878e27b008731e45534be3056  bin/source-build/x64/ColorMatrix64.dll
