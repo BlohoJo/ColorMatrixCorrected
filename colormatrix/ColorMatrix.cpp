@@ -1,9 +1,9 @@
 /*
-**                 ColorMatrix v2.5 for Avisynth 2.5.x
+**                 ColorMatrix v2.6.1 for AviSynth
 **
 **   ColorMatrix 2.0 is based on the original ColorMatrix filter by Wilbert 
 **   Dijkhof.  It adds the ability to convert between any of: Rec.709, FCC, 
-**   Rec.601, and SMPTE 240M. It also makes pre and post clipping optional,
+**   Rec.601, SMPTE 240M, and Rec.2020. It also makes pre and post clipping optional,
 **   adds range expansion/contraction, and more...
 **
 **   Copyright (C) 2006-2009 Kevin Stone
@@ -60,6 +60,10 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 		else if (opt == 1) { cpu &= ~0x28; cpu |= 0x04; }
 		else if (opt == 2) cpu |= 0x2C;
 	}
+#ifdef COLORMATRIX_C_ONLY
+	/* The portable x86/x64 builds intentionally omit the legacy inline ASM. */
+	cpu = 0;
+#endif
 
 	css.cpu = cpu;
 	css.debug = debug;
@@ -80,11 +84,11 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
     if (source == 4 || dest == 4)
         css.cpu = 0;
 
-	modei = source == dest ? -2 : source*4+dest;
+	modei = source == dest ? -2 : MATRIX_MODE_INDEX(source, dest);
 	if (debug)
 	{
 		sprintf(buf,"ColorMatrix:%u:  version %s (%s)\n", 
-			GetCurrentThreadId(), VERSION, DATE);
+			(unsigned)GetCurrentThreadId(), VERSION, DATE);
 		OutputDebugString(buf);
 	}
 	if (hints)
@@ -100,6 +104,9 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 	else child->SetCacheHints(CACHE_NOTHING, 0);
 	if (clamp&1) // clip input to 16-235/16-240 range
 	{
+#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
+		child = env->Invoke("Limiter", child).AsClip();
+#else
 		try
 		{
 			child = env->Invoke("Limiter", child).AsClip();
@@ -112,13 +119,19 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 		{
 			env->ThrowError("ColorMatrix:  avisynth error invoking Limiter (%s)!", e.msg);
 		}
+#endif
 	}
 	if (interlaced)
 	{
 		if (child->GetVideoInfo().IsFieldBased())
 			env->ThrowError("ColorMatrix:  input must be framebased for interlaced=true " \
 				"processing (use AssumeFrameBased())!");
-		try 
+#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
+		child = env->Invoke("InternalCache", child).AsClip();
+		child->SetCacheHints(CACHE_RANGE, 1);
+		child = env->Invoke("SeparateFields", child).AsClip();
+#else
+		try
 		{
 			child = env->Invoke("InternalCache", child).AsClip();
 			child->SetCacheHints(CACHE_RANGE, 1);
@@ -134,6 +147,7 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 			env->ThrowError("ColorMatrix:  avisynth error invoking" \
 				" InternalCache and SeparateFields (%s)!", e.msg);
 		}
+#endif
 		vi.num_frames *= 2;
 		vi.fps_numerator *= 2;
 		vi.height >>= 1;
@@ -160,7 +174,7 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 		if (debug)
 		{
 			sprintf(buf,"ColorMatrix:%u:  number of detected processors = %d\n", 
-				GetCurrentThreadId(), threads);
+				(unsigned)GetCurrentThreadId(), threads);
 			OutputDebugString(buf);
 		}
 	}
@@ -195,9 +209,15 @@ ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest
 		}
 		pssInfo[i]->jobFinished = CreateEvent(NULL, TRUE, TRUE, NULL);
 		pssInfo[i]->nextJob = CreateEvent(NULL, TRUE, FALSE, NULL);
-		thds[i] = vi.IsYUY2() ? 
+#ifdef COLORMATRIX_PORTABLE_BUILD
+		thds[i] = vi.IsYUY2() ?
+			CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&processFrame_YUY2, (void*)(pssInfo[i]), 0, (DWORD*)&tids[i]) :
+			CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&processFrame_YV12, (void*)(pssInfo[i]), 0, (DWORD*)&tids[i]);
+#else
+		thds[i] = vi.IsYUY2() ?
 			(HANDLE)_beginthreadex(0,0,&processFrame_YUY2,(void*)(pssInfo[i]),0,&tids[i]) :
 			(HANDLE)_beginthreadex(0,0,&processFrame_YV12,(void*)(pssInfo[i]),0,&tids[i]);
+#endif
 	}
 }
 
@@ -229,7 +249,7 @@ ColorMatrix::~ColorMatrix()
 int num_processors()
 {
 	int pcount = 0;
-	DWORD p_aff, s_aff;
+	DWORD_PTR p_aff, s_aff;
 	GetProcessAffinityMask(GetCurrentProcess(), &p_aff, &s_aff);
 	for(; p_aff != 0; p_aff>>=1) 
 		pcount += (p_aff&1);
@@ -263,7 +283,7 @@ unsigned __stdcall processFrame_YUY2(void *ps)
 			{
 				char buf[256];
 				sprintf(buf,"ColorMatrix:%u:  frame %d:  YUY2 range conversion only.\n", 
-					GetCurrentThreadId(), pss->cs->n);
+					(unsigned)GetCurrentThreadId(), pss->cs->n);
 				OutputDebugString(buf);
 			}
 			const int *ylut = pss->ylut;
@@ -287,7 +307,7 @@ unsigned __stdcall processFrame_YUY2(void *ps)
 			{
 				char buf[256];
 				sprintf(buf,"ColorMatrix:%u:  frame %d:  using YUY2 %s conversion.\n", 
-					GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+					(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
 				OutputDebugString(buf);
 			}
 			const int c1 = pss->cs->c1;
@@ -335,7 +355,7 @@ unsigned _stdcall processFrame_YV12(void *ps)
 			{
 				char buf[256];
 				sprintf(buf,"ColorMatrix:%u:  frame %d:  YV12 range conversion only.\n", 
-					GetCurrentThreadId(), pss->cs->n);
+					(unsigned)GetCurrentThreadId(), pss->cs->n);
 				OutputDebugString(buf);
 			}
 			for (int b=0; b<3; ++b)
@@ -379,14 +399,15 @@ unsigned _stdcall processFrame_YV12(void *ps)
 			const int src_pitch = pss->src_pitch;
 			const int dst_pitch = pss->dst_pitch;
 			const int c1 = pss->cs->c1;
-			if (c1 == 65536 && (cpu&CPUF_SSE2) && 
-				!((int(srcp)|int(dstp)|widtha|dst_pitch|src_pitch)&15)) 
+#ifndef COLORMATRIX_C_ONLY
+			if (c1 == 65536 && (cpu&CPUF_SSE2) &&
+				!((ULONG_PTR(srcp)|ULONG_PTR(dstp)|widtha|dst_pitch|src_pitch)&15))
 			{
 				if (debug)
 				{
 					char buf[256];
 					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (SSE2).\n", 
-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
 					OutputDebugString(buf);
 				}
 				(find_YV12_SIMD(pss->cs->modef, true))(ps);
@@ -397,18 +418,19 @@ unsigned _stdcall processFrame_YV12(void *ps)
 				{
 					char buf[256];
 					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (MMX).\n", 
-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
 					OutputDebugString(buf);
 				}
 				(find_YV12_SIMD(pss->cs->modef, false))(ps);
 			}
 			else
+#endif
 			{
 				if (debug)
 				{
 					char buf[256];
-					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (C).\n", 
-						GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
+					sprintf(buf,"ColorMatrix:%u:  frame %d:  using YV12 %s conversion (C).\n",
+						(unsigned)GetCurrentThreadId(), pss->cs->n, CTS2(pss->cs->modef));
 					OutputDebugString(buf);
 				}
 				const unsigned char *srcpU = pss->srcpU;
@@ -468,7 +490,7 @@ PVideoFrame __stdcall ColorMatrix::GetFrame(int n, IScriptEnvironment* env)
 		if (debug)
 		{
 			sprintf(buf,"ColorMatrix:%u:  frame %d:  detected colorimetry from d2v = %d (%s)\n", 
-				GetCurrentThreadId(), n, temp, CTS(temp));
+				(unsigned)GetCurrentThreadId(), n, temp, CTS(temp));
 			OutputDebugString(buf);
 		}
 		modef = findMode(temp);
@@ -477,7 +499,7 @@ PVideoFrame __stdcall ColorMatrix::GetFrame(int n, IScriptEnvironment* env)
 			if (debug)
 			{
 				sprintf(buf,"ColorMatrix:%u:  frame %d:  returning src frame... no conversion " \
-					"required (d2v)\n", GetCurrentThreadId(), n);
+					"required (d2v)\n", (unsigned)GetCurrentThreadId(), n);
 				OutputDebugString(buf);
 			}
 			return src;
@@ -495,7 +517,7 @@ PVideoFrame __stdcall ColorMatrix::GetFrame(int n, IScriptEnvironment* env)
 		if (debug)
 		{
 			sprintf(buf,"ColorMatrix:%u:  frame %d:  detected hint = %d (%s)\n", 
-				GetCurrentThreadId(), n, temp, CTS(temp));
+				(unsigned)GetCurrentThreadId(), n, temp, CTS(temp));
 			OutputDebugString(buf);
 		}
 		modef = findMode(temp);
@@ -504,7 +526,7 @@ PVideoFrame __stdcall ColorMatrix::GetFrame(int n, IScriptEnvironment* env)
 			if (debug)
 			{
 				sprintf(buf,"ColorMatrix:%u:  frame %d:  returning src frame... no conversion " \
-					"required (hints)\n", GetCurrentThreadId(), n);
+					"required (hints)\n", (unsigned)GetCurrentThreadId(), n);
 				OutputDebugString(buf);
 			}
 			return src;
@@ -519,6 +541,8 @@ PVideoFrame __stdcall ColorMatrix::GetFrame(int n, IScriptEnvironment* env)
 	const int dst_height = dst->GetHeight();
 	if (modef >= 0)
 	{
+		if (modef >= YUV_CONVERSION_COUNT)
+			env->ThrowError("ColorMatrix: internal conversion mode index is out of range!");
 		css.c1 = yuv_convert[modef][0][0];
 		css.c2 = yuv_convert[modef][0][1];
 		css.c3 = yuv_convert[modef][0][2]; 
@@ -682,14 +706,18 @@ void ColorMatrix::checkMode(const char *md, IScriptEnvironment *env)
 
 int ColorMatrix::findMode(int color)
 {
-	if (color == 1 && dest != 0) 
-		return dest;
-	else if (color == 4 && dest != 1)
-		return 4+dest;
-	else if ((color == 5 || color == 6) && dest != 2)
-		return 8+dest;
-	else if (color == 7 && dest != 3)
-		return 12+dest;
+	int detectedSource = -1;
+	if (color == 1)
+		detectedSource = 0; // Rec.709
+	else if (color == 4)
+		detectedSource = 1; // FCC
+	else if (color == 5 || color == 6)
+		detectedSource = 2; // Rec.601 / SMPTE 170M
+	else if (color == 7)
+		detectedSource = 3; // SMPTE 240M
+
+	if (detectedSource >= 0 && detectedSource != dest)
+		return MATRIX_MODE_INDEX(detectedSource, dest);
 	if (inputFR != outputFR)
 		return -2;
 	return -1;
@@ -697,29 +725,39 @@ int ColorMatrix::findMode(int color)
 
 void (*find_YV12_SIMD(int modef, bool sse2))(void *ps)
 {
-	if (modef == 1 || modef == 2 || modef == 3 || 
-		modef == 13 || modef == 14)
+#ifdef COLORMATRIX_C_ONLY
+	(void)modef;
+	(void)sse2;
+	return NULL;
+#else
+	/*
+	 * These groups are the original four mathematical SIMD kernels remapped
+	 * to the five-wide table introduced with Rec.2020 support.
+	 */
+	if (modef == 1 || modef == 2 || modef == 3 ||
+		modef == 16 || modef == 17)
 	{
 		if (sse2) return &conv1_YV12_SSE2;
 		return &conv1_YV12_MMX;
 	}
-	else if (modef == 4 || modef == 7 || modef == 8 || 
-		modef == 11 || modef == 12)
+	else if (modef == 5 || modef == 8 || modef == 10 ||
+		modef == 13 || modef == 15)
 	{
 		if (sse2) return &conv2_YV12_SSE2;
 		return &conv2_YV12_MMX;
 	}
-	else if (modef == 6)
+	else if (modef == 7)
 	{
 		if (sse2) return &conv3_YV12_SSE2;
 		return &conv3_YV12_MMX;
 	}
-	else if (modef == 9)
+	else if (modef == 11)
 	{
 		if (sse2) return &conv4_YV12_SSE2;
 		return &conv4_YV12_MMX;
 	}
 	return NULL;
+#endif
 }
 
 int ColorMatrix::parseD2V(const char *d2v)
@@ -935,7 +973,7 @@ void ColorMatrix::calc_coefficients(IScriptEnvironment *env)
 		yuv_coeff[i][2][2] = (1.0-yuv_coeff[i][0][2])*rscale;
 	}
     double rgb_coeffd[YUV_COEFFS_LUMA_COUNT][3][3];
-    double yuv_convertd[YUV_COEFFS_LUMA_COUNT * YUV_COEFFS_LUMA_COUNT][3][3];
+    double yuv_convertd[YUV_CONVERSION_COUNT][3][3];
     for (int i = 0; i<YUV_COEFFS_LUMA_COUNT; ++i)
 		inverse3x3(rgb_coeffd[i], yuv_coeff[i]);
 	double yiscale = 1.0/255.0, uviscale = 1.0/255.0;
@@ -999,6 +1037,9 @@ AVSValue __cdecl Create_ColorMatrix(AVSValue args, void* user_data, IScriptEnvir
 		args[12].AsInt(0),args[13].AsInt(3),env);
 	if (interlaced) // interlaced
 	{
+#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
+		return_clip = env->Invoke("Weave", return_clip).AsClip();
+#else
 		try
 		{
 			return_clip = env->Invoke("Weave", return_clip).AsClip();
@@ -1007,13 +1048,17 @@ AVSValue __cdecl Create_ColorMatrix(AVSValue args, void* user_data, IScriptEnvir
 		{
 			env->ThrowError("ColorMatrix:  error invoking Weave (not found)!");
 		}
-		catch (AvisynthError e) 
+		catch (AvisynthError e)
 		{
 			env->ThrowError("ColorMatrix:  avisynth error invoking Weave (%s)!", e.msg);
 		}
+#endif
 	}
 	if (clamp>1) // clip output to 16-235/16-240 range
 	{
+#ifdef COLORMATRIX_NO_CPP_EXCEPTIONS
+		return_clip = env->Invoke("Limiter", return_clip).AsClip();
+#else
 		try
 		{
 			return_clip = env->Invoke("Limiter", return_clip).AsClip();
@@ -1026,6 +1071,7 @@ AVSValue __cdecl Create_ColorMatrix(AVSValue args, void* user_data, IScriptEnvir
 		{
 			env->ThrowError("ColorMatrix:  avisynth error invoking Limiter (%s)!", e.msg);
 		}
+#endif
 	}
 	return return_clip;
 }
@@ -1037,3 +1083,19 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScri
 		Create_ColorMatrix, 0);
     return 0;
 }
+#ifdef COLORMATRIX_PORTABLE_BUILD
+/*
+ * Build-only API3 entry point for the portable x86/x64 reference binaries.
+ * The user-provided upstream snapshot contains an AviSynth 2.5-era header,
+ * so the linkage pointer is retained as an opaque value rather than consumed
+ * by that header.  Hybrid users should prefer the ABI-preserving patched
+ * binaries in the separate binary release.
+ */
+static const void *volatile ColorMatrix_AVS_linkage = 0;
+extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
+	IScriptEnvironment* env, const void* vectors)
+{
+	ColorMatrix_AVS_linkage = vectors;
+	return AvisynthPluginInit2(env);
+}
+#endif
