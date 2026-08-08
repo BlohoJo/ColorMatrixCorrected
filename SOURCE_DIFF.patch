@@ -1,19 +1,19 @@
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/.gitignore /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/.gitignore
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/.gitignore ColorMatrix-2.6.1-fixed-r2/.gitignore
 --- original/ColorMatrix-master/.gitignore	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/.gitignore	2026-08-06 21:32:28.839200551 +0000
++++ ColorMatrix-2.6.1-fixed-r2/.gitignore	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,5 @@
 +build/generated/
 +*.obj
 +*.lib
 +*.exp
 +*.pdb
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/PATCH_NOTES.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/PATCH_NOTES.md
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/PATCH_NOTES.md ColorMatrix-2.6.1-fixed-r2/PATCH_NOTES.md
 --- original/ColorMatrix-master/PATCH_NOTES.md	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/PATCH_NOTES.md	2026-08-06 21:32:28.838541942 +0000
-@@ -0,0 +1,56 @@
++++ ColorMatrix-2.6.1-fixed-r2/PATCH_NOTES.md	2026-08-07 23:07:50.657563172 +0000
+@@ -0,0 +1,115 @@
 +# Patch notes
 +
-+## Root cause
++## Root cause in the upstream source
 +
 +The source defines five luma coefficient sets in this order:
 +
@@ -36,6 +36,10 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +- actual entry 8 in a 5×5 table: `FCC -> SMPTE 240M`
 +- correct index: `2 * 5 + 0 = 10`
 +
++The reporter independently reproduced the original ColorMatrix result in
++VapourSynth by explicitly performing `FCC -> SMPTE 240M`, confirming the
++misindexed operation.
++
 +## Source changes
 +
 +- Added `YUV_CONVERSION_COUNT` and `MATRIX_MODE_INDEX`.
@@ -48,35 +52,90 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +- Replaced the stale four-wide debug-name chain with a 25-entry table.
 +- Added a defensive index bounds check.
 +
-+## Hybrid binary patches
++## Hybrid-compatible binary patches
 +
-+The supplied Hybrid binaries are separate API3/64-bit ports whose exact source
++The supplied Hybrid binaries are separate API3/x64 ports whose exact source
 +was not in the repository archive. `tools/patch_hybrid_binaries.py` therefore
-+performs a narrow, hash-locked patch of those exact DLLs:
++performs a narrow, hash-locked patch of those exact DLLs.
 +
-+- x64: rewrites the constructor arithmetic in place and changes `findMode()`
-+  row offsets from `8/12/4` to `10/15/5`.
-+- x86: redirects the constructor's old four-wide calculation to an executable
-+  code cave inside existing `.text` padding, then changes both inlined
-+  `findMode()` copies from `8/12/4` to `10/15/5`.
++### x86
++
++The original normal-path branch at RVA `0x4115` was:
++
++```asm
++jne 0x416c
++```
++
++RVA `0x416c` was the old `source * 4 + dest` calculation. R1 replaced the
++constructor block at `0x4161` with a trampoline, but left this earlier branch
++target unchanged. For `source != dest`, execution therefore jumped past the
++trampoline into NOP padding and never stored the corrected mode.
++
++R2 changes the short branch displacement from `75 55` to `75 4A`, making it:
++
++```asm
++jne 0x4161
++```
++
++The trampoline at `0x4161` then reaches an executable code cave that computes
++`source * 5 + dest`, stores the mode, and returns to `0x4175`.
++
++### x64
++
++The original normal-path branch at RVA `0x30E7` was:
++
++```asm
++jne 0x3156
++```
++
++R1 rewrote the block beginning at `0x3145`. In the replacement layout,
++`0x3156` was the second byte of a seven-byte `mov` instruction. The unchanged
++branch therefore entered the middle of an instruction and crashed.
++
++R2 changes the short branch displacement from `75 6D` to `75 5C`, making it:
++
++```asm
++jne 0x3145
++```
++
++The replacement block at `0x3145` computes `source * 5 + dest`, stores it, and
++continues at `0x3160`.
++
++### D2V/hint indexing
++
++The x64 `findMode()` row offsets and both inlined x86 copies are also changed
++from `8/12/4` to `10/15/5`.
 +
 +The Hybrid binaries contain only the C conversion path, so no binary SIMD
-+mode-dispatch changes are needed.
++dispatch changes are required.
 +
 +The legacy debug-label selector embedded in the exact Hybrid binaries is not
-+rewritten. With `debug=true`, a corrected five-wide mode can therefore be
-+reported as `unknown`; this does not affect pixel processing. The newly
-+compiled source builds contain corrected diagnostic names.
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/README.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/README.md
++rewritten. With `debug=true`, a corrected five-wide mode can be reported as
++`unknown`; this does not affect pixel processing.
++
++## 64-bit source-build limitation
++
++The upstream snapshot's `avisynth.h` is from the older AviSynth 2.5-style C++
++interface. Hybrid's x64 runtime loads API3 plugins and supplies an
++`AVS_Linkage` table through `AvisynthPluginInit3`. The first portable source
++build merely retained that pointer while continuing to use the old header's
++inline C++ ABI. It compiled, but the reporter confirmed that it crashes in
++Hybrid's x64 path.
++
++This is independent of the five-wide source correction. A supported source-
++based x64 DLL requires the matching classic x64/AviSynth 2.6 API3 header and
++port source. Until that is available, the R2 ABI-preserving binary patch is the
++supported x64 Hybrid replacement.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/README.md ColorMatrix-2.6.1-fixed-r2/README.md
 --- original/ColorMatrix-master/README.md	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/README.md	2026-08-06 21:32:28.837826582 +0000
-@@ -0,0 +1,61 @@
-+# ColorMatrix 2.6.1 — five-wide indexing fix
++++ ColorMatrix-2.6.1-fixed-r2/README.md	2026-08-07 23:07:50.656143826 +0000
+@@ -0,0 +1,91 @@
++# ColorMatrix 2.6.1 — five-wide indexing fix (R2)
 +
 +This repository is a corrected derivative of the user-supplied
 +`sorayuki/ColorMatrix` master snapshot.
 +
-+## Fixed defect
++## Fixed source defect
 +
 +ColorMatrix 2.6 expanded its luma-coefficient list from four matrices to five
 +when Rec.2020 support was added, so the flattened conversion table became 5×5.
@@ -86,55 +145,90 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +source * 4 + dest
 +```
 +
-+has been replaced with a single five-wide helper:
++has been replaced with a shared five-wide helper:
 +
 +```cpp
 +#define MATRIX_MODE_INDEX(source, dest) \
 +    ((source) * YUV_COEFFS_LUMA_COUNT + (dest))
 +```
 +
-+For `Rec.601 -> Rec.709`, the correct index is now `2 * 5 + 0 = 10` rather than
-+8. Index 8 belongs to `FCC -> SMPTE 240M` in the five-wide table.
++For `Rec.601 -> Rec.709`, the correct index is `2 * 5 + 0 = 10`. The
++old expression selected index 8, which is `FCC -> SMPTE 240M` in the 5×5
++table.
 +
-+## Other corrections
++The corrected source was runtime-tested by the reporter through the 32-bit
++source build in Selur Hybrid. The requested conversion completed normally and
++produced the expected color result.
 +
-+- D2V/hint-based source detection now uses the same five-wide index helper.
-+- Legacy MMX/SSE2 dispatcher mode numbers were remapped to the 5×5 table.
++## Other source corrections
++
++- D2V/hint-based source detection uses the same five-wide index helper.
++- Legacy MMX/SSE2 dispatcher mode numbers are remapped to the 5×5 table.
 +- Diagnostic conversion names cover all 25 source/destination pairs.
 +- Conversion-array bounds are checked before use.
 +- The coefficient scratch array uses the shared conversion-count constant.
-+- Small portability changes permit C-only x86/x64 reference builds.
++
++## R2 correction to the Hybrid binary patcher
++
++The first binary-patch release changed the constructor calculation but failed
++to retarget an earlier branch in each original Hybrid DLL:
++
++- In x86, the normal `source != dest` path bypassed the new trampoline, so the
++  conversion was not applied.
++- In x64, the normal path jumped into the middle of the replacement instruction
++  sequence, causing an immediate process crash.
++
++`tools/patch_hybrid_binaries.py` now retargets those incoming branches before
++rewriting the index calculation. See `PATCH_NOTES.md` for exact RVAs and byte
++changes.
 +
 +## Binaries
 +
-+The separately supplied binary package contains two kinds of DLLs:
++The separately supplied R2 binary package contains:
 +
-+1. **`hybrid-drop-in` — recommended for Hybrid.** These are byte-level patches
-+   of the exact 32-bit and 64-bit DLLs supplied with the report. Their original
-+   exports, imports, ABI, and all unrelated machine code are retained.
-+2. **`source-build` — review/reference builds.** These are newly compiled from
-+   this repository using the script under `build/`. They are C-only and have
-+   not been runtime-tested in Hybrid or AviSynth on Windows.
++1. **`hybrid-compatible` — recommended for Selur Hybrid.** These are narrow,
++   hash-locked binary patches of the exact original x86 and x64 Hybrid DLLs.
++   Their original exports, imports, runtime, ABI, and unrelated machine code
++   remain intact.
++2. **`source-build/x86` — user-validated source build.** This was newly compiled
++   from the corrected repository and has been confirmed to run correctly in
++   Hybrid's 32-bit AviSynth path.
++
++A 64-bit source build is deliberately not shipped as a supported Hybrid DLL.
++The attached upstream snapshot contains an AviSynth 2.5-era C++ header, while
++Hybrid's 64-bit runtime uses the AviSynth 2.6 API3 linkage ABI. The earlier
++portable x64 build compiled but crashed in Hybrid. Producing a genuine x64
++source build requires the matching classic x64/API3 SDK or the source of
++Hybrid's separate 64-bit port; a superficial `AvisynthPluginInit3` wrapper is
++not sufficient.
 +
 +Back up the original Hybrid DLLs and test a short clip before adopting a
-+replacement.
++replacement. The R2 Hybrid-compatible binaries have been statically validated
++but could not be executed in Windows from the build container.
 +
 +## Tests
 +
 +```bash
 +python tests/test_mode_index.py
-+build/build_portable_clang_cl.sh
++python tests/test_patched_pe.py \
++  --x86 path/to/patched/x86/colormatrix.dll \
++  --x64 path/to/patched/x64/ColorMatrix64.dll
 +```
 +
-+The machine-code patcher verifies the exact SHA-256 of each supported original
-+DLL and refuses to modify unknown binaries.
++The patcher verifies the exact SHA-256 of each supported original DLL and every
++instruction sequence before modifying it. It refuses unknown binaries.
 +
 +## License
 +
 +The upstream source is distributed under GPLv2; see `gpl.txt`.
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/UPSTREAM.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/UPSTREAM.md
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/SHA256SUMS.txt ColorMatrix-2.6.1-fixed-r2/SHA256SUMS.txt
+--- original/ColorMatrix-master/SHA256SUMS.txt	1970-01-01 00:00:00.000000000 +0000
++++ ColorMatrix-2.6.1-fixed-r2/SHA256SUMS.txt	2026-08-07 23:10:14.014810678 +0000
+@@ -0,0 +1 @@
++c8109af3a1ef32bc6fbd9062f60ef56b2136e4e259be442952f7056fdd125395  bin/source-build/x86/colormatrix.dll
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/UPSTREAM.md ColorMatrix-2.6.1-fixed-r2/UPSTREAM.md
 --- original/ColorMatrix-master/UPSTREAM.md	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/UPSTREAM.md	2026-08-06 21:32:28.840105906 +0000
++++ ColorMatrix-2.6.1-fixed-r2/UPSTREAM.md	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,6 @@
 +# Upstream basis
 +
@@ -142,63 +236,100 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +the user, identified as the `sorayuki/ColorMatrix` repository. The supplied
 +archive did not include Git metadata, so no upstream commit hash is asserted
 +here.
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/VALIDATION.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/VALIDATION.md
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/VALIDATION.md ColorMatrix-2.6.1-fixed-r2/VALIDATION.md
 --- original/ColorMatrix-master/VALIDATION.md	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/VALIDATION.md	2026-08-06 22:12:13.447489710 +0000
-@@ -0,0 +1,21 @@
-+# Validation performed for this release
++++ ColorMatrix-2.6.1-fixed-r2/VALIDATION.md	2026-08-07 23:07:50.658936175 +0000
+@@ -0,0 +1,39 @@
++# Validation performed for R2
 +
-+The following checks were run before packaging:
++## Source-level validation
 +
-+- `tests/test_mode_index.py` passed.
-+- The explicit Rec.601 -> Rec.709 index resolves to 10 in the 5x5 table.
-+- The hint/D2V row offsets and legacy SIMD dispatcher groups were checked
-+  against the corrected five-wide numbering.
-+- `tools/patch_hybrid_binaries.py` reproduced the expected x86 and x64 output
-+  hashes from the exact supplied Hybrid DLLs.
-+- `tests/test_patched_pe.py` passed for both patched Hybrid DLLs.
-+- The portable clang-cl build completed for both x86 and x64.
-+- Two consecutive portable builds produced identical SHA-256 hashes.
-+- The compiled outputs were inspected as PE32 i386 and PE32+ x86-64 DLLs.
-+- The compiled x86 DLL exports `_AvisynthPluginInit2@4` and
-+  `_AvisynthPluginInit3@8`; the compiled x64 DLL exports
-+  `AvisynthPluginInit2` and `AvisynthPluginInit3`.
++- `tests/test_mode_index.py` passes.
++- Explicit `Rec.601 -> Rec.709` resolves to index 10 in the 5×5 table.
++- Entry 8 remains `FCC -> SMPTE 240M`, matching the reporter's independent
++  VapourSynth reproduction of the original defect.
++- Hint/D2V row offsets and legacy SIMD dispatcher groups were checked against
++  the corrected five-wide numbering.
++- The reporter runtime-tested the 32-bit source build in Selur Hybrid: all 240
++  frames encoded successfully, and the visible color error was corrected.
 +
-+Runtime execution inside Selur Hybrid/AviSynth was not possible in the Linux
-+build container. The ABI-preserving `hybrid-drop-in` binaries in the separate
-+binary package are therefore recommended for actual Hybrid testing.
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/README.md /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/README.md
++## R2 Hybrid binary validation
++
++- The patcher accepts only these original SHA-256 values:
++  - x86: `3d042d59df206cd45586348c72d2458dee6e5dd2fc5c8540916245da1a7c8ec2`
++  - x64: `654454449f992122bfae5671003491db67212ee6b15fe0975f81b8b47223fedf`
++- Every original byte sequence is verified before replacement.
++- x86 R2 branch at RVA `0x4115` targets the trampoline at `0x4161`.
++- x86 trampoline targets the code cave at `0x11200`; the cave computes
++  `dest + source * 5`, stores it, and returns to `0x4175`.
++- x64 R2 branch at RVA `0x30E7` targets the beginning of the rewritten block at
++  `0x3145`, not the middle of the store instruction.
++- x64 block computes `source * 5 + dest`, stores it, and continues at `0x3160`.
++- `tests/test_patched_pe.py` checks those branches, instruction bytes, PE
++  machine types, and exact output SHA-256 values.
++- Both ZIP archives pass integrity testing.
++
++## Runtime status
++
++The R1 x86 and x64 binary patches were invalid and have been withdrawn. The R2
++patches correct the identified control-flow errors, but Windows/Hybrid runtime
++execution is not available in the build container. They therefore still need
++short-clip confirmation on the reporter's system.
++
++The earlier x64 portable source build is not a supported Hybrid binary: it
++compiled against an incompatible old C++ header model and was confirmed to
++crash. It is omitted from the R2 binary package.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/README.md ColorMatrix-2.6.1-fixed-r2/build/README.md
 --- original/ColorMatrix-master/build/README.md	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/README.md	2026-08-06 21:32:28.833154172 +0000
-@@ -0,0 +1,18 @@
-+# Portable reference build
++++ ColorMatrix-2.6.1-fixed-r2/build/README.md	2026-08-07 23:07:50.660443040 +0000
+@@ -0,0 +1,36 @@
++# Portable source build
 +
-+`build_portable_clang_cl.sh` cross-compiles 32-bit and 64-bit Windows DLLs with
-+`clang-cl` and `lld-link`. It intentionally uses the C conversion path for both
-+architectures and supplies a small compatibility layer because the upstream
-+snapshot contains a Visual Studio 2005 Win32 project and an AviSynth 2.5-era
-+SDK header.
++`build_portable_clang_cl.sh` cross-compiles the corrected source with
++`clang-cl` and `lld-link`.
 +
-+The resulting DLLs are placed in:
++## Supported output
++
++The default build produces:
 +
 +- `bin/source-build/x86/colormatrix.dll`
-+- `bin/source-build/x64/ColorMatrix64.dll`
 +
-+These binaries prove that the corrected source compiles for both Windows
-+architectures, but they were **not runtime-tested inside Hybrid or AviSynth on
-+Windows**. The exact source of Hybrid's separately ported API3/x64 DLLs was not
-+present in the supplied repository archive. For Hybrid, use the
-+ABI-preserving `hybrid-drop-in` binaries from the separate binary package.
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/build_portable_clang_cl.sh /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/build_portable_clang_cl.sh
++This 32-bit DLL was runtime-tested by the reporter in Selur Hybrid and produced
++the correct Rec.601 -> Rec.709 result.
++
++## Unsupported x64 reference output
++
++The supplied upstream repository contains an AviSynth 2.5-era C++ SDK header.
++Hybrid's 64-bit runtime uses AviSynth 2.6 API3 linkage. A DLL cannot be made ABI
++compatible merely by adding an `AvisynthPluginInit3` function and storing the
++linkage pointer; the C++ inline wrappers and data/interface ABI also need the
++matching API3 header.
++
++For source-review purposes only, the old experimental x64 cross-build can be
++requested with:
++
++```bash
++BUILD_UNSUPPORTED_X64_REFERENCE=1 build/build_portable_clang_cl.sh
++```
++
++It is placed under `bin/unsupported-reference/x64/` and **must not be installed
++in Hybrid**. The reporter confirmed that this reference build crashes in the
++64-bit Hybrid path.
++
++Use the R2 `hybrid-compatible/x64/ColorMatrix64.dll`, which is a narrow patch of
++Hybrid's original ABI-compatible x64 DLL, until the matching classic x64/API3
++port source or SDK is available.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/build_portable_clang_cl.sh ColorMatrix-2.6.1-fixed-r2/build/build_portable_clang_cl.sh
 --- original/ColorMatrix-master/build/build_portable_clang_cl.sh	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/build_portable_clang_cl.sh	2026-08-06 21:33:50.973792052 +0000
-@@ -0,0 +1,134 @@
++++ ColorMatrix-2.6.1-fixed-r2/build/build_portable_clang_cl.sh	2026-08-07 23:08:07.884179086 +0000
+@@ -0,0 +1,142 @@
 +#!/usr/bin/env bash
 +set -euo pipefail
 +
 +ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 +BUILD_DIR="$ROOT/build/generated"
 +OUT_DIR="$ROOT/bin/source-build"
++UNSUPPORTED_OUT_DIR="$ROOT/bin/unsupported-reference"
 +
 +for tool in clang-cl lld-link; do
 +  command -v "$tool" >/dev/null 2>&1 || {
@@ -208,7 +339,10 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +done
 +
 +rm -rf "$BUILD_DIR"
-+mkdir -p "$BUILD_DIR"/{imports/x86,imports/x64,obj/x86,obj/x64} "$OUT_DIR"/{x86,x64}
++mkdir -p "$BUILD_DIR"/{imports/x86,imports/x64,obj/x86,obj/x64} "$OUT_DIR/x86"
++if [[ "${BUILD_UNSUPPORTED_X64_REFERENCE:-0}" == "1" ]]; then
++  mkdir -p "$UNSUPPORTED_OUT_DIR/x64"
++fi
 +
 +cat > "$BUILD_DIR/imports/x86/kernel32.def" <<'EOF'
 +LIBRARY KERNEL32.dll
@@ -324,20 +458,24 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +}
 +
 +build_arch x86 i686-pc-windows-msvc x86 'DllMain@12' "$OUT_DIR/x86/colormatrix.dll"
-+build_arch x64 x86_64-pc-windows-msvc x64 DllMain "$OUT_DIR/x64/ColorMatrix64.dll"
++sha256sum "$OUT_DIR/x86/colormatrix.dll"
 +
-+sha256sum "$OUT_DIR/x86/colormatrix.dll" "$OUT_DIR/x64/ColorMatrix64.dll"
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/assert.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/assert.h
++if [[ "${BUILD_UNSUPPORTED_X64_REFERENCE:-0}" == "1" ]]; then
++  echo "WARNING: building unsupported x64 ABI-reference DLL; do not install it in Hybrid." >&2
++  build_arch x64 x86_64-pc-windows-msvc x64 DllMain "$UNSUPPORTED_OUT_DIR/x64/ColorMatrix64.dll"
++  sha256sum "$UNSUPPORTED_OUT_DIR/x64/ColorMatrix64.dll"
++fi
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/assert.h ColorMatrix-2.6.1-fixed-r2/build/compat/assert.h
 --- original/ColorMatrix-master/build/compat/assert.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/assert.h	2026-08-06 21:32:27.729768201 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/assert.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,4 @@
 +#ifndef COLORMATRIX_COMPAT_ASSERT_H
 +#define COLORMATRIX_COMPAT_ASSERT_H
 +#define assert(x) ((void)0)
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/crtdbg.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/crtdbg.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/crtdbg.h ColorMatrix-2.6.1-fixed-r2/build/compat/crtdbg.h
 --- original/ColorMatrix-master/build/compat/crtdbg.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/crtdbg.h	2026-08-06 21:32:27.729784335 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/crtdbg.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,11 @@
 +#ifndef COLORMATRIX_COMPAT_CRTDBG_H
 +#define COLORMATRIX_COMPAT_CRTDBG_H
@@ -350,24 +488,24 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +#define _ASSERT(x) ((void)0)
 +#define _ASSERTE(x) ((void)0)
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/float.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/float.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/float.h ColorMatrix-2.6.1-fixed-r2/build/compat/float.h
 --- original/ColorMatrix-master/build/compat/float.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/float.h	2026-08-06 21:32:27.729795080 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/float.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,4 @@
 +#ifndef COLORMATRIX_COMPAT_FLOAT_H
 +#define COLORMATRIX_COMPAT_FLOAT_H
 +#define DBL_EPSILON 2.220446049250313080847263336181640625e-16
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/objbase.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/objbase.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/objbase.h ColorMatrix-2.6.1-fixed-r2/build/compat/objbase.h
 --- original/ColorMatrix-master/build/compat/objbase.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/objbase.h	2026-08-06 21:32:27.729808210 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/objbase.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,3 @@
 +#ifndef COLORMATRIX_COMPAT_OBJBASE_H
 +#define COLORMATRIX_COMPAT_OBJBASE_H
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/process.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/process.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/process.h ColorMatrix-2.6.1-fixed-r2/build/compat/process.h
 --- original/ColorMatrix-master/build/compat/process.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/process.h	2026-08-06 21:32:27.729820037 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/process.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,6 @@
 +#ifndef COLORMATRIX_COMPAT_PROCESS_H
 +#define COLORMATRIX_COMPAT_PROCESS_H
@@ -375,9 +513,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +typedef unsigned (__stdcall *CM_BEGINTHREAD_PROC)(void *);
 +extern "C" __declspec(dllimport) ULONG_PTR __cdecl _beginthreadex(void *, unsigned, CM_BEGINTHREAD_PROC, void *, unsigned, unsigned *);
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/stdio.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/stdio.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/stdio.h ColorMatrix-2.6.1-fixed-r2/build/compat/stdio.h
 --- original/ColorMatrix-master/build/compat/stdio.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/stdio.h	2026-08-06 21:32:28.174957140 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/stdio.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,19 @@
 +#ifndef COLORMATRIX_COMPAT_STDIO_H
 +#define COLORMATRIX_COMPAT_STDIO_H
@@ -398,9 +536,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +__declspec(dllimport) void * __cdecl memcpy(void *, const void *, SIZE_T);
 +}
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/windef.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windef.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/windef.h ColorMatrix-2.6.1-fixed-r2/build/compat/windef.h
 --- original/ColorMatrix-master/build/compat/windef.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windef.h	2026-08-06 21:32:27.729840618 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/windef.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,26 @@
 +#ifndef COLORMATRIX_COMPAT_WINDEF_H
 +#define COLORMATRIX_COMPAT_WINDEF_H
@@ -428,9 +566,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +#define FALSE 0
 +#endif
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/windows.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windows.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/windows.h ColorMatrix-2.6.1-fixed-r2/build/compat/windows.h
 --- original/ColorMatrix-master/build/compat/windows.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/windows.h	2026-08-06 21:32:27.729850452 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/windows.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,30 @@
 +#ifndef COLORMATRIX_COMPAT_WINDOWS_H
 +#define COLORMATRIX_COMPAT_WINDOWS_H
@@ -462,16 +600,16 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +#define lstrcmpi lstrcmpiA
 +#define CreateEvent CreateEventA
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/build/compat/xmmintrin.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/xmmintrin.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/compat/xmmintrin.h ColorMatrix-2.6.1-fixed-r2/build/compat/xmmintrin.h
 --- original/ColorMatrix-master/build/compat/xmmintrin.h	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/build/compat/xmmintrin.h	2026-08-06 21:32:27.729860487 +0000
++++ ColorMatrix-2.6.1-fixed-r2/build/compat/xmmintrin.h	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,3 @@
 +#ifndef COLORMATRIX_COMPAT_XMMINTRIN_H
 +#define COLORMATRIX_COMPAT_XMMINTRIN_H
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.cpp
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix.cpp ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.cpp
 --- original/ColorMatrix-master/colormatrix/ColorMatrix.cpp	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.cpp	2026-08-06 21:32:28.715803041 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.cpp	2026-08-07 23:08:32.068248460 +0000
 @@ -1,9 +1,9 @@
  /*
 -**                 ColorMatrix v2.5 for Avisynth 2.5.x
@@ -816,7 +954,7 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
  	}
  	return return_clip;
  }
-@@ -1036,4 +1082,20 @@
+@@ -1036,4 +1082,21 @@
  		"[inputFR]b[outputFR]b[hints]b[d2v]s[debug]b[threads]i[thrdmthd]i[opt]i", 
  		Create_ColorMatrix, 0);
      return 0;
@@ -825,11 +963,12 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +}
 +#ifdef COLORMATRIX_PORTABLE_BUILD
 +/*
-+ * Build-only API3 entry point for the portable x86/x64 reference binaries.
-+ * The user-provided upstream snapshot contains an AviSynth 2.5-era header,
-+ * so the linkage pointer is retained as an opaque value rather than consumed
-+ * by that header.  Hybrid users should prefer the ABI-preserving patched
-+ * binaries in the separate binary release.
++ * Compatibility entry point used by the portable build. The user-provided
++ * snapshot contains an AviSynth 2.5-era header, so the API3 linkage pointer is
++ * retained only as an opaque value. The x86 build has been validated in the
++ * reporter's Hybrid environment. A portable x64 build from this old header is
++ * ABI-incompatible with Hybrid's classic AviSynth 2.6 API3 runtime and is
++ * therefore unsupported; use the ABI-preserving R2 x64 binary patch instead.
 + */
 +static const void *volatile ColorMatrix_AVS_linkage = 0;
 +extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
@@ -839,9 +978,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +	return AvisynthPluginInit2(env);
 +}
 +#endif
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix.h ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.h
 --- original/ColorMatrix-master/colormatrix/ColorMatrix.h	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.h	2026-08-06 21:32:27.728651793 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.h	2026-08-06 00:00:00.000000000 +0000
 @@ -1,9 +1,9 @@
  /*
 -**                 ColorMatrix v2.5 for Avisynth 2.5.x
@@ -923,9 +1062,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
  	const char *mode, *d2v;
  	unsigned char *d2vArray;
  	bool hints, interlaced, debug;
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix.rc /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.rc
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix.rc ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.rc
 --- original/ColorMatrix-master/colormatrix/ColorMatrix.rc	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix.rc	2026-08-06 21:41:01.591842270 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix.rc	2026-08-06 00:00:00.000000000 +0000
 @@ -51,8 +51,8 @@
  //
  
@@ -951,9 +1090,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
          END
      END
      BLOCK "VarFileInfo"
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/ColorMatrix_ASM.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix_ASM.cpp
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix_ASM.cpp ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix_ASM.cpp
 --- original/ColorMatrix-master/colormatrix/ColorMatrix_ASM.cpp	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/ColorMatrix_ASM.cpp	2026-08-06 21:41:01.592013924 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/ColorMatrix_ASM.cpp	2026-08-06 00:00:00.000000000 +0000
 @@ -1,5 +1,5 @@
  /*
 -**                 ColorMatrix v2.5 for Avisynth 2.5.x
@@ -961,9 +1100,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
  **
  **   ColorMatrix 2.0 is based on the original ColorMatrix filter by Wilbert 
  **   Dijkhof.  It adds the ability to convert between any of: Rec.709, FCC, 
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/avisynth.h /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/avisynth.h
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/avisynth.h ColorMatrix-2.6.1-fixed-r2/colormatrix/avisynth.h
 --- original/ColorMatrix-master/colormatrix/avisynth.h	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/avisynth.h	2026-08-06 21:32:27.728754745 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/avisynth.h	2026-08-06 00:00:00.000000000 +0000
 @@ -337,7 +337,7 @@
    VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height);
    VideoFrame(VideoFrameBuffer* _vfb, int _offset, int _pitch, int _row_size, int _height, int _offsetU, int _offsetV, int _pitchUV);
@@ -988,9 +1127,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
    }
  };
  
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix/portable_runtime.cpp /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/portable_runtime.cpp
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/portable_runtime.cpp ColorMatrix-2.6.1-fixed-r2/colormatrix/portable_runtime.cpp
 --- original/ColorMatrix-master/colormatrix/portable_runtime.cpp	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix/portable_runtime.cpp	2026-08-06 21:32:27.728827964 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix/portable_runtime.cpp	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,43 @@
 +/*
 + * Minimal runtime glue for the reproducible LLVM cross-build in build/.
@@ -1035,9 +1174,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +{
 +    return TRUE;
 +}
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/colormatrix.htm /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix.htm
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix.htm ColorMatrix-2.6.1-fixed-r2/colormatrix.htm
 --- original/ColorMatrix-master/colormatrix.htm	2018-02-22 08:16:56.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/colormatrix.htm	2026-08-06 21:32:27.724354603 +0000
++++ ColorMatrix-2.6.1-fixed-r2/colormatrix.htm	2026-08-06 00:00:00.000000000 +0000
 @@ -59,11 +59,11 @@
  </HEAD>
  <BODY>
@@ -1068,9 +1207,9 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
    + Add Rec.2020 support (without ASM optimization)
  </p>
  <p>v2.5, 25th January 2009<br>
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tests/test_mode_index.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_mode_index.py
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/tests/test_mode_index.py ColorMatrix-2.6.1-fixed-r2/tests/test_mode_index.py
 --- original/ColorMatrix-master/tests/test_mode_index.py	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_mode_index.py	2026-08-06 21:32:28.834092656 +0000
++++ ColorMatrix-2.6.1-fixed-r2/tests/test_mode_index.py	2026-08-06 00:00:00.000000000 +0000
 @@ -0,0 +1,46 @@
 +#!/usr/bin/env python3
 +from __future__ import annotations
@@ -1118,34 +1257,140 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +
 +if __name__ == "__main__":
 +    raise SystemExit(main())
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tests/test_patched_pe.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_patched_pe.py
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/tests/test_patched_pe.py ColorMatrix-2.6.1-fixed-r2/tests/test_patched_pe.py
 --- original/ColorMatrix-master/tests/test_patched_pe.py	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tests/test_patched_pe.py	2026-08-06 21:32:28.835314209 +0000
-@@ -0,0 +1,41 @@
++++ ColorMatrix-2.6.1-fixed-r2/tests/test_patched_pe.py	2026-08-07 23:09:18.092285708 +0000
+@@ -0,0 +1,145 @@
 +#!/usr/bin/env python3
-+"""Static checks for binaries produced by tools/patch_hybrid_binaries.py."""
++"""Static checks for the R2 Hybrid-compatible patched DLLs."""
 +from __future__ import annotations
 +
 +import argparse
 +import hashlib
 +import struct
++from dataclasses import dataclass
 +from pathlib import Path
 +
 +EXPECTED = {
-+    "x86": "597325ad1ef1d19a90c317a86789282ec3f400a5fb77ebea0ba7b524f5a97307",
-+    "x64": "bca02c5400a753ebce3924515d74160140c16650369c76d60af47feeae8641b9",
++    "x86": "52ecc494cd930298e5778b7aa8d6f241cb25f0ca8a3ff13d5f945b535c737d1c",
++    "x64": "1e87ce9d680c050aca88ab3c0137d220579ae05c23919eb6311310eefe0fc1c1",
 +}
++
++
++@dataclass(frozen=True)
++class Section:
++    name: str
++    virtual_address: int
++    virtual_size: int
++    raw_offset: int
++    raw_size: int
++
++
++class PE:
++    def __init__(self, path: Path) -> None:
++        self.path = path
++        self.data = path.read_bytes()
++        assert self.data[:2] == b"MZ"
++        pe = struct.unpack_from("<I", self.data, 0x3C)[0]
++        assert self.data[pe:pe + 4] == b"PE\0\0"
++        self.machine, count = struct.unpack_from("<HH", self.data, pe + 4)
++        optional_size = struct.unpack_from("<H", self.data, pe + 20)[0]
++        table = pe + 24 + optional_size
++        sections: list[Section] = []
++        for i in range(count):
++            off = table + 40 * i
++            name = self.data[off:off + 8].rstrip(b"\0").decode("ascii", "replace")
++            vsize, va, rsize, roff = struct.unpack_from("<IIII", self.data, off + 8)
++            sections.append(Section(name, va, vsize, roff, rsize))
++        self.sections = sections
++
++    def section(self, name: str) -> Section:
++        return next(s for s in self.sections if s.name == name)
++
++    def offset(self, rva: int) -> int:
++        for s in self.sections:
++            if s.virtual_address <= rva < s.virtual_address + max(s.virtual_size, s.raw_size):
++                return s.raw_offset + rva - s.virtual_address
++        raise AssertionError(f"RVA 0x{rva:X} is unmapped in {self.path}")
++
++    def at(self, rva: int, size: int) -> bytes:
++        off = self.offset(rva)
++        return self.data[off:off + size]
 +
 +
 +def sha(path: Path) -> str:
 +    return hashlib.sha256(path.read_bytes()).hexdigest()
 +
 +
-+def machine(path: Path) -> int:
-+    data = path.read_bytes()
-+    pe = struct.unpack_from("<I", data, 0x3C)[0]
-+    assert data[pe:pe + 4] == b"PE\0\0"
-+    return struct.unpack_from("<H", data, pe + 4)[0]
++def short_jcc_target(pe: PE, rva: int, opcode: int = 0x75) -> int:
++    insn = pe.at(rva, 2)
++    assert insn[0] == opcode, insn.hex(" ")
++    displacement = struct.unpack("<b", insn[1:])[0]
++    return rva + 2 + displacement
++
++
++def rel32_target(pe: PE, rva: int, opcode: int = 0xE9) -> int:
++    insn = pe.at(rva, 5)
++    assert insn[0] == opcode, insn.hex(" ")
++    displacement = struct.unpack("<i", insn[1:])[0]
++    return rva + 5 + displacement
++
++
++def check_x86(path: Path) -> None:
++    pe = PE(path)
++    assert sha(path) == EXPECTED["x86"]
++    assert pe.machine == 0x014C
++
++    # R2 fix: normal source!=dest path must enter the trampoline, not bypass it.
++    assert pe.at(0x4115, 2) == bytes.fromhex("75 4a")
++    assert short_jcc_target(pe, 0x4115) == 0x4161
++    assert rel32_target(pe, 0x4161) == 0x11200
++
++    cave = bytes.fromhex(
++        "39 c2 74 07 "          # cmp edx,eax / je equal
++        "8d 04 90 "             # lea eax,[eax+edx*4]
++        "01 d0 "                # add eax,edx => dest + source*5
++        "eb 05 "
++        "b8 fe ff ff ff "
++        "89 81 e0 04 00 00 "
++        "e9 5a 2f ff ff"
++    )
++    assert pe.at(0x11200, len(cave)) == cave
++    assert rel32_target(pe, 0x11216) == 0x4175
++    assert pe.section(".text").virtual_size >= 0x1021B
++
++    for rva in (0x125F, 0x22C2):
++        assert pe.at(rva, 4) == bytes.fromhex("83 45 ec 0a")
++    for rva in (0x1D77, 0x23F7):
++        assert pe.at(rva, 4) == bytes.fromhex("83 45 ec 0f")
++    for rva in (0x1D95, 0x2415):
++        assert pe.at(rva, 4) == bytes.fromhex("83 45 ec 05")
++
++
++def check_x64(path: Path) -> None:
++    pe = PE(path)
++    assert sha(path) == EXPECTED["x64"]
++    assert pe.machine == 0x8664
++
++    # R2 fix: normal source!=dest path must enter at the first instruction.
++    assert pe.at(0x30E7, 2) == bytes.fromhex("75 5c")
++    assert short_jcc_target(pe, 0x30E7) == 0x3145
++
++    block = bytes.fromhex(
++        "39 d0 74 07 "
++        "6b c0 05 "             # source *= 5
++        "01 d0 "                # + dest
++        "eb 05 "
++        "b8 fe ff ff ff "
++        "41 89 86 f8 04 00 00 "
++        "90 90 90 90"
++    )
++    assert pe.at(0x3145, len(block)) == block
++    assert pe.at(0x3155, 7) == bytes.fromhex("41 89 86 f8 04 00 00")
++
++    assert pe.at(0x727F, 3) == bytes.fromhex("83 c0 0a")
++    assert pe.at(0x72AF, 3) == bytes.fromhex("83 c0 0f")
++    assert pe.at(0x72BE, 3) == bytes.fromhex("83 c0 05")
 +
 +
 +def main() -> int:
@@ -1153,20 +1398,18 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +    ap.add_argument("--x86", type=Path, required=True)
 +    ap.add_argument("--x64", type=Path, required=True)
 +    args = ap.parse_args()
-+    assert sha(args.x86) == EXPECTED["x86"]
-+    assert sha(args.x64) == EXPECTED["x64"]
-+    assert machine(args.x86) == 0x014C
-+    assert machine(args.x64) == 0x8664
-+    print("patched PE tests: PASS")
++    check_x86(args.x86)
++    check_x64(args.x64)
++    print("R2 patched PE tests: PASS")
 +    return 0
 +
 +
 +if __name__ == "__main__":
 +    raise SystemExit(main())
-diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original/ColorMatrix-master/tools/patch_hybrid_binaries.py /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tools/patch_hybrid_binaries.py
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/tools/patch_hybrid_binaries.py ColorMatrix-2.6.1-fixed-r2/tools/patch_hybrid_binaries.py
 --- original/ColorMatrix-master/tools/patch_hybrid_binaries.py	1970-01-01 00:00:00.000000000 +0000
-+++ /mnt/data/final_colormatrix_release/ColorMatrix-2.6.1-fixed/tools/patch_hybrid_binaries.py	2026-08-06 21:32:28.837007229 +0000
-@@ -0,0 +1,199 @@
++++ ColorMatrix-2.6.1-fixed-r2/tools/patch_hybrid_binaries.py	2026-08-07 23:08:48.722982806 +0000
+@@ -0,0 +1,217 @@
 +#!/usr/bin/env python3
 +"""Patch Hybrid's supplied ColorMatrix 2.6 DLLs for five-wide matrix indexing.
 +
@@ -1183,6 +1426,8 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +
 +X86_SHA256 = "3d042d59df206cd45586348c72d2458dee6e5dd2fc5c8540916245da1a7c8ec2"
 +X64_SHA256 = "654454449f992122bfae5671003491db67212ee6b15fe0975f81b8b47223fedf"
++X86_PATCHED_SHA256 = "52ecc494cd930298e5778b7aa8d6f241cb25f0ca8a3ff13d5f945b535c737d1c"
++X64_PATCHED_SHA256 = "1e87ce9d680c050aca88ab3c0137d220579ae05c23919eb6311310eefe0fc1c1"
 +
 +
 +@dataclass(frozen=True)
@@ -1264,6 +1509,11 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +    if pe.machine != 0x8664:
 +        raise ValueError("x64 input is not an AMD64 PE image")
 +
++    # Redirect the earlier source!=dest branch into the rewritten constructor block.
++    # It originally jumped directly to the old LEA at RVA 0x3156, which is now
++    # inside the replacement sequence.
++    pe.patch_rva(0x30E7, bytes.fromhex("75 6d"), bytes.fromhex("75 5c"))
++
 +    # Constructor: source == dest ? -2 : source * 5 + dest.
 +    original = bytes.fromhex(
 +        "3b c2 75 0d 41 c7 86 f8 04 00 00 fe ff ff ff "
@@ -1293,6 +1543,10 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +    pe = PEImage(data)
 +    if pe.machine != 0x014C:
 +        raise ValueError("x86 input is not an i386 PE image")
++
++    # Redirect the earlier source!=dest branch to the trampoline at 0x4161.
++    # It originally jumped to the old LEA at 0x416C, bypassing the trampoline.
++    pe.patch_rva(0x4115, bytes.fromhex("75 55"), bytes.fromhex("75 4a"))
 +
 +    constructor_rva = 0x4161
 +    return_rva = 0x4175
@@ -1343,10 +1597,17 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' original
 +def patch_file(kind: str, source: Path, destination: Path) -> None:
 +    data = bytearray(source.read_bytes())
 +    patched = patch_x86(data) if kind == "x86" else patch_x64(data)
++    actual_hash = sha256(patched)
++    expected_hash = X86_PATCHED_SHA256 if kind == "x86" else X64_PATCHED_SHA256
++    if actual_hash != expected_hash:
++        raise ValueError(
++            f"internal error: {kind} patched SHA-256 mismatch: "
++            f"expected {expected_hash}, got {actual_hash}"
++        )
 +    destination.parent.mkdir(parents=True, exist_ok=True)
 +    destination.write_bytes(patched)
 +    print(f"{kind}: {source.name} -> {destination}")
-+    print(f"  SHA-256: {sha256(patched)}")
++    print(f"  SHA-256: {actual_hash}")
 +
 +
 +def main() -> int:
