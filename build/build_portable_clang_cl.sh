@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD_DIR="$ROOT/build/generated"
 OUT_DIR="$ROOT/bin/source-build"
+UNSUPPORTED_OUT_DIR="$ROOT/bin/unsupported-reference"
 
 for tool in clang-cl lld-link; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -13,7 +14,10 @@ for tool in clang-cl lld-link; do
 done
 
 rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"/{imports/x86,imports/x64,obj/x86,obj/x64} "$OUT_DIR"/{x86,x64}
+mkdir -p "$BUILD_DIR"/{imports/x86,imports/x64,obj/x86,obj/x64} "$OUT_DIR/x86"
+if [[ "${BUILD_UNSUPPORTED_X64_REFERENCE:-0}" == "1" ]]; then
+  mkdir -p "$UNSUPPORTED_OUT_DIR/x64"
+fi
 
 cat > "$BUILD_DIR/imports/x86/kernel32.def" <<'EOF'
 LIBRARY KERNEL32.dll
@@ -129,6 +133,10 @@ build_arch() {
 }
 
 build_arch x86 i686-pc-windows-msvc x86 'DllMain@12' "$OUT_DIR/x86/colormatrix.dll"
-build_arch x64 x86_64-pc-windows-msvc x64 DllMain "$OUT_DIR/x64/ColorMatrix64.dll"
+sha256sum "$OUT_DIR/x86/colormatrix.dll"
 
-sha256sum "$OUT_DIR/x86/colormatrix.dll" "$OUT_DIR/x64/ColorMatrix64.dll"
+if [[ "${BUILD_UNSUPPORTED_X64_REFERENCE:-0}" == "1" ]]; then
+  echo "WARNING: building unsupported x64 ABI-reference DLL; do not install it in Hybrid." >&2
+  build_arch x64 x86_64-pc-windows-msvc x64 DllMain "$UNSUPPORTED_OUT_DIR/x64/ColorMatrix64.dll"
+  sha256sum "$UNSUPPORTED_OUT_DIR/x64/ColorMatrix64.dll"
+fi
