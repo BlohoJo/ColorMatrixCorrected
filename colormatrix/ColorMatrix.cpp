@@ -1085,11 +1085,12 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScri
 }
 #ifdef COLORMATRIX_PORTABLE_BUILD
 /*
- * Build-only API3 entry point for the portable x86/x64 reference binaries.
- * The user-provided upstream snapshot contains an AviSynth 2.5-era header,
- * so the linkage pointer is retained as an opaque value rather than consumed
- * by that header.  Hybrid users should prefer the ABI-preserving patched
- * binaries in the separate binary release.
+ * Compatibility entry point used by the portable build. The user-provided
+ * snapshot contains an AviSynth 2.5-era header, so the API3 linkage pointer is
+ * retained only as an opaque value. The x86 build has been validated in the
+ * reporter's Hybrid environment. A portable x64 build from this old header is
+ * ABI-incompatible with Hybrid's classic AviSynth 2.6 API3 runtime and is
+ * therefore unsupported; use the ABI-preserving R2 x64 binary patch instead.
  */
 static const void *volatile ColorMatrix_AVS_linkage = 0;
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
