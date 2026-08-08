@@ -14,6 +14,8 @@ from pathlib import Path
 
 X86_SHA256 = "3d042d59df206cd45586348c72d2458dee6e5dd2fc5c8540916245da1a7c8ec2"
 X64_SHA256 = "654454449f992122bfae5671003491db67212ee6b15fe0975f81b8b47223fedf"
+X86_PATCHED_SHA256 = "52ecc494cd930298e5778b7aa8d6f241cb25f0ca8a3ff13d5f945b535c737d1c"
+X64_PATCHED_SHA256 = "1e87ce9d680c050aca88ab3c0137d220579ae05c23919eb6311310eefe0fc1c1"
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,11 @@ def patch_x64(data: bytearray) -> bytearray:
     if pe.machine != 0x8664:
         raise ValueError("x64 input is not an AMD64 PE image")
 
+    # Redirect the earlier source!=dest branch into the rewritten constructor block.
+    # It originally jumped directly to the old LEA at RVA 0x3156, which is now
+    # inside the replacement sequence.
+    pe.patch_rva(0x30E7, bytes.fromhex("75 6d"), bytes.fromhex("75 5c"))
+
     # Constructor: source == dest ? -2 : source * 5 + dest.
     original = bytes.fromhex(
         "3b c2 75 0d 41 c7 86 f8 04 00 00 fe ff ff ff "
@@ -124,6 +131,10 @@ def patch_x86(data: bytearray) -> bytearray:
     pe = PEImage(data)
     if pe.machine != 0x014C:
         raise ValueError("x86 input is not an i386 PE image")
+
+    # Redirect the earlier source!=dest branch to the trampoline at 0x4161.
+    # It originally jumped to the old LEA at 0x416C, bypassing the trampoline.
+    pe.patch_rva(0x4115, bytes.fromhex("75 55"), bytes.fromhex("75 4a"))
 
     constructor_rva = 0x4161
     return_rva = 0x4175
@@ -174,10 +185,17 @@ def patch_x86(data: bytearray) -> bytearray:
 def patch_file(kind: str, source: Path, destination: Path) -> None:
     data = bytearray(source.read_bytes())
     patched = patch_x86(data) if kind == "x86" else patch_x64(data)
+    actual_hash = sha256(patched)
+    expected_hash = X86_PATCHED_SHA256 if kind == "x86" else X64_PATCHED_SHA256
+    if actual_hash != expected_hash:
+        raise ValueError(
+            f"internal error: {kind} patched SHA-256 mismatch: "
+            f"expected {expected_hash}, got {actual_hash}"
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(patched)
     print(f"{kind}: {source.name} -> {destination}")
-    print(f"  SHA-256: {sha256(patched)}")
+    print(f"  SHA-256: {actual_hash}")
 
 
 def main() -> int:
