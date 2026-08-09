@@ -27,6 +27,10 @@
 
 #include "ColorMatrix.h"
 
+#if defined(COLORMATRIX_CLASSIC_API3_X64)
+const AVS_Linkage* AVS_linkage = 0;
+#endif
+
 ColorMatrix::ColorMatrix(PClip _child, const char* _mode, int _source, int _dest, int _clamp, 
 	bool _interlaced, bool _inputFR, bool _outputFR, bool _hints, const char* _d2v, bool _debug, 
 	int _threads, int _thrdmthd, int _opt, IScriptEnvironment* env) : GenericVideoFilter(_child), 
@@ -1076,21 +1080,28 @@ AVSValue __cdecl Create_ColorMatrix(AVSValue args, void* user_data, IScriptEnvir
 	return return_clip;
 }
 
-extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env) 
+#if defined(COLORMATRIX_CLASSIC_API3_X64)
+extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
+	IScriptEnvironment* env, const AVS_Linkage* const vectors)
+{
+	AVS_linkage = vectors;
+	env->AddFunction("ColorMatrix", "c[mode]s[source]i[dest]i[clamp]i[interlaced]b" \
+		"[inputFR]b[outputFR]b[hints]b[d2v]s[debug]b[threads]i[thrdmthd]i[opt]i",
+		Create_ColorMatrix, 0);
+	return 0;
+}
+#else
+extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env)
 {
 	env->AddFunction("ColorMatrix", "c[mode]s[source]i[dest]i[clamp]i[interlaced]b" \
-		"[inputFR]b[outputFR]b[hints]b[d2v]s[debug]b[threads]i[thrdmthd]i[opt]i", 
+		"[inputFR]b[outputFR]b[hints]b[d2v]s[debug]b[threads]i[thrdmthd]i[opt]i",
 		Create_ColorMatrix, 0);
-    return 0;
+	return 0;
 }
 #ifdef COLORMATRIX_PORTABLE_BUILD
 /*
- * Compatibility entry point used by the portable build. The user-provided
- * snapshot contains an AviSynth 2.5-era header, so the API3 linkage pointer is
- * retained only as an opaque value. The x86 build has been validated in the
- * reporter's Hybrid environment. A portable x64 build from this old header is
- * ABI-incompatible with Hybrid's classic AviSynth 2.6 API3 runtime and is
- * therefore unsupported; use the ABI-preserving R2 x64 binary patch instead.
+ * Compatibility API3 entry point retained for the proven x86 source build.
+ * The x64 source build uses the real classic-v6 AVS_Linkage API above.
  */
 static const void *volatile ColorMatrix_AVS_linkage = 0;
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
@@ -1099,4 +1110,5 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
 	ColorMatrix_AVS_linkage = vectors;
 	return AvisynthPluginInit2(env);
 }
+#endif
 #endif
