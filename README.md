@@ -1,91 +1,107 @@
-# ColorMatrix 2.6.1 — five-wide indexing fix (R2)
+# ColorMatrix 2.6.1 — corrected five-wide indexing (R3)
 
 This repository is a corrected derivative of the user-supplied
 `sorayuki/ColorMatrix` master snapshot.
 
-## Fixed source defect
+## Fixed ColorMatrix defect
 
-ColorMatrix 2.6 expanded its luma-coefficient list from four matrices to five
-when Rec.2020 support was added, so the flattened conversion table became 5×5.
-Several call sites still indexed it as a four-column table. In particular:
+ColorMatrix 2.6 added Rec.2020 as a fifth luma-coefficient set, expanding the
+flattened conversion table from 4×4 to 5×5. Several call sites continued to
+index the table as if each row had four entries:
 
 ```cpp
 source * 4 + dest
 ```
 
-has been replaced with a shared five-wide helper:
+The corrected code uses the actual coefficient count:
 
 ```cpp
 #define MATRIX_MODE_INDEX(source, dest) \
     ((source) * YUV_COEFFS_LUMA_COUNT + (dest))
 ```
 
-For `Rec.601 -> Rec.709`, the correct index is `2 * 5 + 0 = 10`. The
-old expression selected index 8, which is `FCC -> SMPTE 240M` in the 5×5
-table.
+For `Rec.601 -> Rec.709`, the correct entry is `2 * 5 + 0 = 10`. The old
+expression selected entry 8, which is `FCC -> SMPTE 240M` in the 5×5 table.
+The reporter independently reproduced the original visual error by requesting
+that exact FCC-to-SMPTE-240M operation in VapourSynth.
 
-The corrected source was runtime-tested by the reporter through the 32-bit
-source build in Selur Hybrid. The requested conversion completed normally and
-produced the expected color result.
+The same five-wide correction is applied to explicit modes, D2V/hint modes,
+diagnostic names, bounds checks, and the legacy SIMD dispatcher.
 
-## Other source corrections
+## R3: genuine classic-x64/API3 source build
 
-- D2V/hint-based source detection uses the same five-wide index helper.
-- Legacy MMX/SSE2 dispatcher mode numbers are remapped to the 5×5 table.
-- Diagnostic conversion names cover all 25 source/destination pairs.
-- Conversion-array bounds are checked before use.
-- The coefficient scratch array uses the shared conversion-count constant.
+R3 adds a newly compiled 64-bit source-build candidate for Hybrid's classic
+AviSynth runtime. This is not a machine-code patch of Hybrid's DLL.
 
-## R2 correction to the Hybrid binary patcher
+The two historical source archives supplied for investigation were useful for
+confirming old x64 class layouts, but both expose the older interface version 3
+and neither defines `AVS_Linkage` or `AvisynthPluginInit3`. They therefore are
+not the exact SDK required by Hybrid.
 
-The first binary-patch release changed the constructor calculation but failed
-to retarget an earlier branch in each original Hybrid DLL:
+The missing build interface was reconstructed from three compatible sources:
 
-- In x86, the normal `source != dest` path bypassed the new trampoline, so the
-  conversion was not applied.
-- In x64, the normal path jumped into the middle of the replacement instruction
-  sequence, causing an immediate process crash.
+1. AviSynth 2.6's documented interface-v6/API3 linkage design.
+2. The preserved classic-v6 `AVS_Linkage` prefix and plugin wrappers in
+   maintained compatibility headers.
+3. Static ABI observations from Hybrid's original working x64
+   `ColorMatrix64.dll`, including its export, `AVS_Linkage` offsets, class
+   sizes, `IClip::GetVersion()`, and `IScriptEnvironment` vtable calls.
 
-`tools/patch_hybrid_binaries.py` now retargets those incoming branches before
-rewriting the index calculation. See `PATCH_NOTES.md` for exact RVAs and byte
-changes.
+The resulting minimal header is:
 
-## Binaries
+```text
+colormatrix/avisynth26_api3_x64.h
+```
 
-The separately supplied R2 binary package contains:
+It supplies a real `AvisynthPluginInit3`, stores the host linkage table, and
+routes plugin-side `PClip`, `PVideoFrame`, `AVSValue`, `VideoInfo`, and
+`VideoFrame` operations through that table. This is the substantive difference
+from the withdrawn R1 x64 source build, which merely stored the API3 pointer
+while continuing to use the old baked C++ ABI.
 
-1. **`hybrid-compatible` — recommended for Selur Hybrid.** These are narrow,
-   hash-locked binary patches of the exact original x86 and x64 Hybrid DLLs.
-   Their original exports, imports, runtime, ABI, and unrelated machine code
-   remain intact.
-2. **`source-build/x86` — user-validated source build.** This was newly compiled
-   from the corrected repository and has been confirmed to run correctly in
-   Hybrid's 32-bit AviSynth path.
+See `ABI_RESEARCH.md` and `VALIDATION.md` for the evidence and limitations.
 
-A 64-bit source build is deliberately not shipped as a supported Hybrid DLL.
-The attached upstream snapshot contains an AviSynth 2.5-era C++ header, while
-Hybrid's 64-bit runtime uses the AviSynth 2.6 API3 linkage ABI. The earlier
-portable x64 build compiled but crashed in Hybrid. Producing a genuine x64
-source build requires the matching classic x64/API3 SDK or the source of
-Hybrid's separate 64-bit port; a superficial `AvisynthPluginInit3` wrapper is
-not sufficient.
+## Binary status
 
-Back up the original Hybrid DLLs and test a short clip before adopting a
-replacement. The R2 Hybrid-compatible binaries have been statically validated
-but could not be executed in Windows from the build container.
+The repository and binary package contain four DLLs:
+
+| Path | SHA-256 | Status |
+|---|---|---|
+| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Runtime-tested by the reporter in Hybrid; correct |
+| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Runtime-tested by the reporter in Hybrid; correct |
+| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Runtime-tested by the reporter in Hybrid; correct |
+| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Newly compiled R3 candidate; static validation passed, Windows/Hybrid runtime test still required |
+
+The `hybrid-compatible` DLLs are narrow, hash-locked patches of Hybrid's exact
+original binaries. The `source-build` DLLs are newly linked from this source
+tree.
+
+Back up Hybrid's original DLL before replacement. Test the x64 source build on
+a short clip before adopting it for normal work.
+
+## Build
+
+```bash
+bash build/build_portable_clang_cl.sh
+```
+
+The script requires `clang-cl` and `lld-link`, and produces both x86 and x64
+source builds. It intentionally uses ColorMatrix's C conversion path so that a
+correct source mode cannot be routed through stale legacy SIMD mode numbering.
 
 ## Tests
 
 ```bash
 python tests/test_mode_index.py
 python tests/test_patched_pe.py \
-  --x86 path/to/patched/x86/colormatrix.dll \
-  --x64 path/to/patched/x64/ColorMatrix64.dll
+  --x86 bin/hybrid-compatible/x86/colormatrix.dll \
+  --x64 bin/hybrid-compatible/x64/ColorMatrix64.dll
+python tests/test_source_api3_x64.py \
+  --x86 bin/source-build/x86/colormatrix.dll \
+  --x64 bin/source-build/x64/ColorMatrix64.dll
 ```
-
-The patcher verifies the exact SHA-256 of each supported original DLL and every
-instruction sequence before modifying it. It refuses unknown binaries.
 
 ## License
 
-The upstream source is distributed under GPLv2; see `gpl.txt`.
+The upstream source is distributed under GPLv2; see `gpl.txt`. The bundled
+classic API declarations retain the AviSynth header's plugin-linking exception.
