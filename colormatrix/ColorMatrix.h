@@ -30,7 +30,11 @@
 #include <xmmintrin.h>
 #include <process.h>
 #include <float.h>
+#if defined(COLORMATRIX_CLASSIC_API3_X64)
+#include "avisynth26_api3_x64.h"
+#else
 #include "avisynth.h"
+#endif
 
 #define VERSION "2.6.1"
 #define DATE "08/06/2026"
