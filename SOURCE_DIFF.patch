@@ -9,8 +9,8 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +*.pdb
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/ABI_RESEARCH.md ColorMatrix-2.6.1-fixed-r3/ABI_RESEARCH.md
 --- original/ColorMatrix-master/ABI_RESEARCH.md	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/ABI_RESEARCH.md	2026-08-08 08:20:38.414084334 +0000
-@@ -0,0 +1,112 @@
++++ ColorMatrix-2.6.1-fixed-r3/ABI_RESEARCH.md	2026-08-09 07:49:14.664917210 +0000
+@@ -0,0 +1,120 @@
 +# Classic x64/API3 ABI research
 +
 +## Goal
@@ -106,11 +106,19 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +the 64-bit-safe layout observed in Hybrid's binary and the 2.6 release history.
 +This does not affect ColorMatrix's executed call set.
 +
-+## Remaining validation boundary
++## Runtime confirmation
 +
-+Static ABI validation cannot prove successful execution inside Hybrid. The x64
-+source build must still be exercised by the reporter on Windows using the same
-+short Rec.601-to-Rec.709 test that validated the other three DLLs.
++The source-built x64 DLL produced by this interface layer has SHA-256
++`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`.
++The reporter subsequently confirmed that it works correctly in Selur Hybrid
++2026.03.21.1 on Windows 10 Pro 22H2 x64 with an AMD Ryzen 9950X: it loaded,
++completed the Rec.601-to-Rec.709 workflow without crashing, and did not produce
++the erroneous FCC-to-SMPTE-240M color shift.
++
++That result validates the reconstructed interface-v6/API3 linkage path for the
++reported Hybrid runtime. It does not imply exhaustive compatibility with every
++classic AviSynth host or every unused declaration in this intentionally minimal
++header.
 +
 +## Reference locations
 +
@@ -125,8 +133,8 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +  `https://github.com/vapoursynth/vapoursynth/blob/master/src/avisynth/avisynth.h`
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/PATCH_NOTES.md ColorMatrix-2.6.1-fixed-r3/PATCH_NOTES.md
 --- original/ColorMatrix-master/PATCH_NOTES.md	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/PATCH_NOTES.md	2026-08-08 08:17:22.792673340 +0000
-@@ -0,0 +1,81 @@
++++ ColorMatrix-2.6.1-fixed-r3/PATCH_NOTES.md	2026-08-09 07:49:14.665100155 +0000
+@@ -0,0 +1,91 @@
 +# Patch notes
 +
 +## Upstream five-wide indexing defect
@@ -208,11 +216,21 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +All ColorMatrix-used helper objects call the classic host through the linkage
 +table. This is a full source-level ABI adaptation, not an added export around
 +old baked wrappers.
++
++## R3 runtime status
++
++All four distributed DLLs have now been runtime-confirmed by the reporter in
++Selur Hybrid. In particular, the genuine x64 source build
++`bin/source-build/x64/ColorMatrix64.dll` with SHA-256
++`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`
++loaded and completed the Rec.601-to-Rec.709 workflow with no crash and no
++incorrect color shift. This confirms that the classic-x64/API3 source
++adaptation is operational in the reported Windows 10 Pro 22H2 x64 environment.
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/README.md ColorMatrix-2.6.1-fixed-r3/README.md
 --- original/ColorMatrix-master/README.md	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/README.md	2026-08-08 08:17:22.791219725 +0000
-@@ -0,0 +1,107 @@
-+# ColorMatrix 2.6.1 — corrected five-wide indexing (R3)
++++ ColorMatrix-2.6.1-fixed-r3/README.md	2026-08-09 07:49:14.664592616 +0000
+@@ -0,0 +1,118 @@
++# ColorMatrix 2.6.1 — corrected five-wide indexing (R3, runtime-confirmed)
 +
 +This repository is a corrected derivative of the user-supplied
 +`sorayuki/ColorMatrix` master snapshot.
@@ -244,8 +262,8 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +
 +## R3: genuine classic-x64/API3 source build
 +
-+R3 adds a newly compiled 64-bit source-build candidate for Hybrid's classic
-+AviSynth runtime. This is not a machine-code patch of Hybrid's DLL.
++R3 adds a newly compiled 64-bit source build for Hybrid's classic AviSynth
++runtime. This is not a machine-code patch of Hybrid's DLL.
 +
 +The two historical source archives supplied for investigation were useful for
 +confirming old x64 class layouts, but both expose the older interface version 3
@@ -273,25 +291,36 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +from the withdrawn R1 x64 source build, which merely stored the API3 pointer
 +while continuing to use the old baked C++ ABI.
 +
-+See `ABI_RESEARCH.md` and `VALIDATION.md` for the evidence and limitations.
++The resulting x64 source-built DLL, SHA-256
++`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`,
++was subsequently runtime-confirmed by the reporter in Selur Hybrid
++2026.03.21.1 on Windows 10 Pro 22H2 x64 with an AMD Ryzen 9950X. It loaded and
++completed the Rec.601-to-Rec.709 workflow without a crash and without the
++erroneous FCC-to-SMPTE-240M color shift.
++
++See `ABI_RESEARCH.md`, `VALIDATION.md`, and `RUNTIME_VALIDATION.md` for the
++evidence, test status, and validation scope.
 +
 +## Binary status
 +
-+The repository and binary package contain four DLLs:
++The repository and binary package contain four DLLs. All four have been
++runtime-confirmed in the reported Hybrid workflow:
 +
 +| Path | SHA-256 | Status |
 +|---|---|---|
-+| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Runtime-tested by the reporter in Hybrid; correct |
-+| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Runtime-tested by the reporter in Hybrid; correct |
-+| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Runtime-tested by the reporter in Hybrid; correct |
-+| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Newly compiled R3 candidate; static validation passed, Windows/Hybrid runtime test still required |
++| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Runtime-tested in Hybrid; no crash and no color shift |
++| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Runtime-tested in Hybrid; no crash and no color shift |
++| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Runtime-tested in Hybrid; no crash and no color shift |
++| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Runtime-tested in Hybrid; no crash and no color shift |
 +
 +The `hybrid-compatible` DLLs are narrow, hash-locked patches of Hybrid's exact
 +original binaries. The `source-build` DLLs are newly linked from this source
-+tree.
++tree. Runtime confirmation covers the reported system and conversion workflow;
++it is not a guarantee for every classic AviSynth host or every possible filter
++configuration.
 +
-+Back up Hybrid's original DLL before replacement. Test the x64 source build on
-+a short clip before adopting it for normal work.
++Back up Hybrid's original DLL before replacement and verify the SHA-256 value
++of the selected replacement.
 +
 +## Build
 +
@@ -319,9 +348,49 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +
 +The upstream source is distributed under GPLv2; see `gpl.txt`. The bundled
 +classic API declarations retain the AviSynth header's plugin-linking exception.
+diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/RUNTIME_VALIDATION.md ColorMatrix-2.6.1-fixed-r3/RUNTIME_VALIDATION.md
+--- original/ColorMatrix-master/RUNTIME_VALIDATION.md	1970-01-01 00:00:00.000000000 +0000
++++ ColorMatrix-2.6.1-fixed-r3/RUNTIME_VALIDATION.md	2026-08-09 07:49:14.665360225 +0000
+@@ -0,0 +1,36 @@
++# Reporter runtime validation
++
++## Recorded status
++
++Runtime confirmation was completed for all four R3 DLLs. The final x64 source
++build confirmation was recorded on 2026-08-09.
++
++Reported environment:
++
++- Selur Hybrid 2026.03.21.1
++- Windows 10 Pro 22H2 x64
++- AMD Ryzen 9950X
++- ColorMatrix Rec.601-to-Rec.709 workflow used throughout the investigation
++
++## Results
++
++| Binary | SHA-256 | Result |
++|---|---|---|
++| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Works correctly in Hybrid; no crash and no color shift |
++| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Works correctly in Hybrid; no crash and no color shift |
++| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Works correctly in Hybrid; no crash and no color shift |
++| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Works correctly in Hybrid; no crash and no color shift |
++
++The x64 source-build result is significant because it confirms the reconstructed
++classic interface-v6/API3 compatibility layer at runtime, rather than only by
++static PE inspection. The corrected source build applies the intended
++Rec.601-to-Rec.709 conversion instead of the old accidental FCC-to-SMPTE-240M
++operation.
++
++## Scope
++
++These are reporter-supplied runtime results for the environment and workflow
++above. They validate the distributed hashes in that context; they are not an
++exhaustive certification of every ColorMatrix mode, input format, AviSynth
++variant, or host program. Any rebuilt or modified DLL should be rehashed and
++retested.
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/SHA256SUMS.txt ColorMatrix-2.6.1-fixed-r3/SHA256SUMS.txt
 --- original/ColorMatrix-master/SHA256SUMS.txt	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/SHA256SUMS.txt	2026-08-08 08:20:17.015721883 +0000
++++ ColorMatrix-2.6.1-fixed-r3/SHA256SUMS.txt	2026-08-08 08:20:18.000000000 +0000
 @@ -0,0 +1,4 @@
 +52ecc494cd930298e5778b7aa8d6f241cb25f0ca8a3ff13d5f945b535c737d1c  bin/hybrid-compatible/x86/colormatrix.dll
 +1e87ce9d680c050aca88ab3c0137d220579ae05c23919eb6311310eefe0fc1c1  bin/hybrid-compatible/x64/ColorMatrix64.dll
@@ -339,21 +408,30 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +here.
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/VALIDATION.md ColorMatrix-2.6.1-fixed-r3/VALIDATION.md
 --- original/ColorMatrix-master/VALIDATION.md	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/VALIDATION.md	2026-08-08 08:17:22.793350162 +0000
-@@ -0,0 +1,62 @@
++++ ColorMatrix-2.6.1-fixed-r3/VALIDATION.md	2026-08-09 07:49:14.664783068 +0000
+@@ -0,0 +1,76 @@
 +# Validation performed for R3
 +
 +## Runtime-confirmed binaries
 +
-+The reporter tested all three previously deliverable corrected DLLs in Selur
-+Hybrid on Windows 10 Pro 22H2:
++The reporter tested all four corrected DLLs in Selur Hybrid on Windows 10 Pro
++22H2 x64. The reported x64 system used an AMD Ryzen 9950X. Each DLL completed
++the Rec.601-to-Rec.709 workflow without a crash and without the erroneous color
++shift:
 +
-+- `hybrid-compatible/x86/colormatrix.dll`: no crash and no color shift.
-+- `hybrid-compatible/x64/ColorMatrix64.dll`: no crash and no color shift.
-+- `source-build/x86/colormatrix.dll`: no crash and no color shift.
++| Binary | SHA-256 | Reporter result |
++|---|---|---|
++| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Correct; no crash and no color shift |
++| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Correct; no crash and no color shift |
++| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Correct; no crash and no color shift |
++| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Correct; no crash and no color shift |
 +
-+The reporter also reproduced the original defect by explicitly converting
-+FCC to SMPTE 240M in VapourSynth, independently confirming the table-index
++The x64 source-build confirmation was recorded on 2026-08-09. It closes the
++remaining R3 runtime-validation item for the reconstructed classic-x64/API3
++interface.
++
++The reporter also reproduced the original defect by explicitly converting FCC
++to SMPTE 240M in VapourSynth, independently confirming the table-index
 +analysis.
 +
 +## Source-level tests
@@ -377,7 +455,7 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +Both Hybrid-compatible DLLs have additionally passed the reporter's runtime
 +validation.
 +
-+## x64 source-build static validation
++## Source-build static validation
 +
 +`tests/test_source_api3_x64.py` checks:
 +
@@ -398,15 +476,20 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF
 +```
 +
-+## Remaining runtime test
++The reporter's successful Hybrid test confirms that this statically verified
++API3 path also works at runtime in the reported environment.
 +
-+The R3 x64 source build cannot be executed in the Linux build container. It is
-+therefore a runtime candidate until tested in Hybrid on Windows. Static checks
-+substantially reduce ABI risk but do not replace that test.
++## Validation scope
++
++The runtime results establish correct operation for the reported Selur Hybrid
++workflow and test system. They do not exhaustively certify every conversion
++mode, input format, classic AviSynth build, or host application. The source and
++PE tests remain useful guards against regression, but future changes should be
++retested on Windows.
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/README.md ColorMatrix-2.6.1-fixed-r3/build/README.md
 --- original/ColorMatrix-master/build/README.md	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/build/README.md	2026-08-08 08:17:22.794085052 +0000
-@@ -0,0 +1,54 @@
++++ ColorMatrix-2.6.1-fixed-r3/build/README.md	2026-08-09 07:49:14.665256734 +0000
+@@ -0,0 +1,57 @@
 +# Reproducible portable source build
 +
 +`build_portable_clang_cl.sh` cross-compiles ColorMatrix with `clang-cl` and
@@ -419,9 +502,10 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +bin/source-build/x64/ColorMatrix64.dll
 +```
 +
-+The x86 output is the exact reporter-validated source build. The x64 output is
-+a genuine classic interface-v6/API3 build using
-+`colormatrix/avisynth26_api3_x64.h`.
++Both outputs are exact reporter-validated source builds. The x64 output is a
++genuine classic interface-v6/API3 build using
++`colormatrix/avisynth26_api3_x64.h`; it has been confirmed to load and operate
++correctly in Selur Hybrid 2026.03.21.1 on Windows 10 Pro 22H2 x64.
 +
 +## Requirements
 +
@@ -460,10 +544,12 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +`AvisynthPluginInit3`.
 +
 +The build uses `/Brepro`. Rebuilding without source/toolchain changes should
-+produce the same output hashes in the same environment.
++produce the same output hashes in the same environment. Runtime confirmation
++of the supplied outputs does not remove the need to retest after source,
++compiler, linker, or compatibility-header changes.
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/build/build_portable_clang_cl.sh ColorMatrix-2.6.1-fixed-r3/build/build_portable_clang_cl.sh
 --- original/ColorMatrix-master/build/build_portable_clang_cl.sh	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/build/build_portable_clang_cl.sh	2026-08-08 07:47:53.007120190 +0000
++++ ColorMatrix-2.6.1-fixed-r3/build/build_portable_clang_cl.sh	2026-08-08 07:47:54.000000000 +0000
 @@ -0,0 +1,139 @@
 +#!/usr/bin/env bash
 +set -euo pipefail
@@ -748,7 +834,7 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +#endif
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix.cpp ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.cpp
 --- original/ColorMatrix-master/colormatrix/ColorMatrix.cpp	2018-02-22 08:16:56.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.cpp	2026-08-08 07:47:52.467813450 +0000
++++ ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.cpp	2026-08-09 07:49:36.988953978 +0000
 @@ -1,9 +1,9 @@
  /*
 -**                 ColorMatrix v2.5 for Avisynth 2.5.x
@@ -1096,7 +1182,7 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
  		try
  		{
  			return_clip = env->Invoke("Limiter", return_clip).AsClip();
-@@ -1026,14 +1075,40 @@
+@@ -1026,14 +1075,47 @@
  		{
  			env->ThrowError("ColorMatrix:  avisynth error invoking Limiter (%s)!", e.msg);
  		}
@@ -1107,6 +1193,13 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
  
 -extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit2(IScriptEnvironment* env) 
 +#if defined(COLORMATRIX_CLASSIC_API3_X64)
++/*
++ * This real classic interface-v6/API3 path is used by the reporter-validated
++ * x64 source build (SHA-256
++ * 2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF).
++ * It was confirmed in Selur Hybrid 2026.03.21.1 on Windows 10 Pro 22H2 x64:
++ * no crash and no erroneous color shift during Rec.601-to-Rec.709 conversion.
++ */
 +extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
 +	IScriptEnvironment* env, const AVS_Linkage* const vectors)
 +{
@@ -1144,7 +1237,7 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +#endif
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/ColorMatrix.h ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.h
 --- original/ColorMatrix-master/colormatrix/ColorMatrix.h	2018-02-22 08:16:56.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.h	2026-08-08 07:47:52.467399343 +0000
++++ ColorMatrix-2.6.1-fixed-r3/colormatrix/ColorMatrix.h	2026-08-08 07:47:52.000000000 +0000
 @@ -1,9 +1,9 @@
  /*
 -**                 ColorMatrix v2.5 for Avisynth 2.5.x
@@ -1299,8 +1392,8 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
  
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/colormatrix/avisynth26_api3_x64.h ColorMatrix-2.6.1-fixed-r3/colormatrix/avisynth26_api3_x64.h
 --- original/ColorMatrix-master/colormatrix/avisynth26_api3_x64.h	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/colormatrix/avisynth26_api3_x64.h	2026-08-08 07:47:15.557952205 +0000
-@@ -0,0 +1,637 @@
++++ ColorMatrix-2.6.1-fixed-r3/colormatrix/avisynth26_api3_x64.h	2026-08-09 07:49:14.665857199 +0000
+@@ -0,0 +1,645 @@
 +// Minimal classic AviSynth 2.6 C++ API3 header for the ColorMatrix x64 build.
 +//
 +// This header deliberately targets the ABI used by Hybrid's classic x64
@@ -1310,6 +1403,14 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +// maintained AviSynth C++ header's classic-v6 compatibility prefix.
 +//
 +// Only the public API surface needed to build ColorMatrix is included.
++//
++// Runtime validation recorded 2026-08-09:
++// the source-built x64 ColorMatrix64.dll produced with this header
++// (SHA-256 2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF)
++// was confirmed by the reporter in Selur Hybrid 2026.03.21.1 on Windows 10
++// Pro 22H2 x64. It completed the Rec.601-to-Rec.709 workflow without a crash
++// and without the erroneous FCC-to-SMPTE-240M color shift. This validates the
++// reported Hybrid workflow, not every possible classic AviSynth host.
 +
 +#ifndef COLORMATRIX_AVISYNTH26_API3_X64_H
 +#define COLORMATRIX_AVISYNTH26_API3_X64_H
@@ -2219,10 +2320,14 @@ diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclu
 +    raise SystemExit(main())
 diff -ruN '--exclude=bin' '--exclude=generated' '--exclude=__pycache__' '--exclude=SOURCE_DIFF.patch' original/ColorMatrix-master/tests/test_source_api3_x64.py ColorMatrix-2.6.1-fixed-r3/tests/test_source_api3_x64.py
 --- original/ColorMatrix-master/tests/test_source_api3_x64.py	1970-01-01 00:00:00.000000000 +0000
-+++ ColorMatrix-2.6.1-fixed-r3/tests/test_source_api3_x64.py	2026-08-08 08:18:00.817319750 +0000
-@@ -0,0 +1,161 @@
++++ ColorMatrix-2.6.1-fixed-r3/tests/test_source_api3_x64.py	2026-08-09 07:49:14.666310416 +0000
+@@ -0,0 +1,165 @@
 +#!/usr/bin/env python3
-+"""Static checks for the source-built x86 and classic API3 x64 DLLs."""
++"""Static checks for the source-built x86 and classic API3 x64 DLLs.
++
++Both expected hashes have separately passed reporter runtime validation in
++Selur Hybrid; these checks guard the source/PE properties that produced them.
++"""
 +from __future__ import annotations
 +
 +import argparse
