@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Static checks for the source-built x86 and classic API3 x64 DLLs."""
+"""Static checks for the source-built x86 and classic API3 x64 DLLs.
+
+Both expected hashes have separately passed reporter runtime validation in
+Selur Hybrid; these checks guard the source/PE properties that produced them.
+"""
 from __future__ import annotations
 
 import argparse
