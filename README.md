@@ -1,7 +1,6 @@
-# ColorMatrix 2.6.1 — corrected five-wide indexing (R3)
+# ColorMatrix 2.6.1 — corrected five-wide indexing (R3, runtime-confirmed)
 
-This repository is a corrected derivative of the user-supplied
-`sorayuki/ColorMatrix` master snapshot.
+This repository is a corrected derivative of [`sorayuki/ColorMatrix`](https://github.com/sorayuki/ColorMatrix).
 
 ## Fixed ColorMatrix defect
 
@@ -30,8 +29,8 @@ diagnostic names, bounds checks, and the legacy SIMD dispatcher.
 
 ## R3: genuine classic-x64/API3 source build
 
-R3 adds a newly compiled 64-bit source-build candidate for Hybrid's classic
-AviSynth runtime. This is not a machine-code patch of Hybrid's DLL.
+R3 adds a newly compiled 64-bit source build for Hybrid's classic AviSynth
+runtime. This is not a machine-code patch of Hybrid's DLL.
 
 The two historical source archives supplied for investigation were useful for
 confirming old x64 class layouts, but both expose the older interface version 3
@@ -59,25 +58,36 @@ routes plugin-side `PClip`, `PVideoFrame`, `AVSValue`, `VideoInfo`, and
 from the withdrawn R1 x64 source build, which merely stored the API3 pointer
 while continuing to use the old baked C++ ABI.
 
-See `ABI_RESEARCH.md` and `VALIDATION.md` for the evidence and limitations.
+The resulting x64 source-built DLL, SHA-256
+`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`,
+was subsequently runtime-confirmed by the reporter in Selur Hybrid
+2026.03.21.1 on Windows 10 Pro 22H2 x64 with an AMD Ryzen 9950X. It loaded and
+completed the Rec.601-to-Rec.709 workflow without a crash and without the
+erroneous FCC-to-SMPTE-240M color shift.
+
+See `ABI_RESEARCH.md`, `VALIDATION.md`, and `RUNTIME_VALIDATION.md` for the
+evidence, test status, and validation scope.
 
 ## Binary status
 
-The repository and binary package contain four DLLs:
+The repository and binary package contain four DLLs. All four have been
+runtime-confirmed in the reported Hybrid workflow:
 
 | Path | SHA-256 | Status |
 |---|---|---|
-| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Runtime-tested by the reporter in Hybrid; correct |
-| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Runtime-tested by the reporter in Hybrid; correct |
-| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Runtime-tested by the reporter in Hybrid; correct |
-| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Newly compiled R3 candidate; static validation passed, Windows/Hybrid runtime test still required |
+| `bin/hybrid-compatible/x86/colormatrix.dll` | `52ECC494CD930298E5778B7AA8D6F241CB25F0CA8A3FF13D5F945B535C737D1C` | Runtime-tested in Hybrid; no crash and no color shift |
+| `bin/hybrid-compatible/x64/ColorMatrix64.dll` | `1E87CE9D680C050ACA88AB3C0137D220579AE05C23919EB6311310EEFE0FC1C1` | Runtime-tested in Hybrid; no crash and no color shift |
+| `bin/source-build/x86/colormatrix.dll` | `C8109AF3A1EF32BC6FBD9062F60EF56B2136E4E259BE442952F7056FDD125395` | Runtime-tested in Hybrid; no crash and no color shift |
+| `bin/source-build/x64/ColorMatrix64.dll` | `2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF` | Runtime-tested in Hybrid; no crash and no color shift |
 
 The `hybrid-compatible` DLLs are narrow, hash-locked patches of Hybrid's exact
 original binaries. The `source-build` DLLs are newly linked from this source
-tree.
+tree. Runtime confirmation covers the reported system and conversion workflow;
+it is not a guarantee for every classic AviSynth host or every possible filter
+configuration.
 
-Back up Hybrid's original DLL before replacement. Test the x64 source build on
-a short clip before adopting it for normal work.
+Back up Hybrid's original DLL before replacement and verify the SHA-256 value
+of the selected replacement.
 
 ## Build
 
