@@ -10,9 +10,10 @@ bin/source-build/x86/colormatrix.dll
 bin/source-build/x64/ColorMatrix64.dll
 ```
 
-The x86 output is the exact reporter-validated source build. The x64 output is
-a genuine classic interface-v6/API3 build using
-`colormatrix/avisynth26_api3_x64.h`.
+Both outputs are exact reporter-validated source builds. The x64 output is a
+genuine classic interface-v6/API3 build using
+`colormatrix/avisynth26_api3_x64.h`; it has been confirmed to load and operate
+correctly in Selur Hybrid 2026.03.21.1 on Windows 10 Pro 22H2 x64.
 
 ## Requirements
 
@@ -51,4 +52,6 @@ This selects the linkage-backed classic x64 header and exports only
 `AvisynthPluginInit3`.
 
 The build uses `/Brepro`. Rebuilding without source/toolchain changes should
-produce the same output hashes in the same environment.
+produce the same output hashes in the same environment. Runtime confirmation
+of the supplied outputs does not remove the need to retest after source,
+compiler, linker, or compatibility-header changes.
