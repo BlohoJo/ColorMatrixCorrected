@@ -1081,6 +1081,13 @@ AVSValue __cdecl Create_ColorMatrix(AVSValue args, void* user_data, IScriptEnvir
 }
 
 #if defined(COLORMATRIX_CLASSIC_API3_X64)
+/*
+ * This real classic interface-v6/API3 path is used by the reporter-validated
+ * x64 source build (SHA-256
+ * 2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF).
+ * It was confirmed in Selur Hybrid 2026.03.21.1 on Windows 10 Pro 22H2 x64:
+ * no crash and no erroneous color shift during Rec.601-to-Rec.709 conversion.
+ */
 extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
 	IScriptEnvironment* env, const AVS_Linkage* const vectors)
 {
