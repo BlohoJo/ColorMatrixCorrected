@@ -7,6 +7,14 @@
 // maintained AviSynth C++ header's classic-v6 compatibility prefix.
 //
 // Only the public API surface needed to build ColorMatrix is included.
+//
+// Runtime validation recorded 2026-08-09:
+// the source-built x64 ColorMatrix64.dll produced with this header
+// (SHA-256 2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF)
+// was confirmed by the reporter in Selur Hybrid 2026.03.21.1 on Windows 10
+// Pro 22H2 x64. It completed the Rec.601-to-Rec.709 workflow without a crash
+// and without the erroneous FCC-to-SMPTE-240M color shift. This validates the
+// reported Hybrid workflow, not every possible classic AviSynth host.
 
 #ifndef COLORMATRIX_AVISYNTH26_API3_X64_H
 #define COLORMATRIX_AVISYNTH26_API3_X64_H
