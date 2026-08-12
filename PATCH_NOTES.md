@@ -79,3 +79,13 @@ extern "C" __declspec(dllexport) const char* __stdcall AvisynthPluginInit3(
 All ColorMatrix-used helper objects call the classic host through the linkage
 table. This is a full source-level ABI adaptation, not an added export around
 old baked wrappers.
+
+## R3 runtime status
+
+All four distributed DLLs have now been runtime-confirmed by the reporter in
+Selur Hybrid. In particular, the genuine x64 source build
+`bin/source-build/x64/ColorMatrix64.dll` with SHA-256
+`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`
+loaded and completed the Rec.601-to-Rec.709 workflow with no crash and no
+incorrect color shift. This confirms that the classic-x64/API3 source
+adaptation is operational in the reported Windows 10 Pro 22H2 x64 environment.
