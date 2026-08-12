@@ -93,11 +93,19 @@ spelling/type of those two memory-size declarations across branches; R3 uses
 the 64-bit-safe layout observed in Hybrid's binary and the 2.6 release history.
 This does not affect ColorMatrix's executed call set.
 
-## Remaining validation boundary
+## Runtime confirmation
 
-Static ABI validation cannot prove successful execution inside Hybrid. The x64
-source build must still be exercised by the reporter on Windows using the same
-short Rec.601-to-Rec.709 test that validated the other three DLLs.
+The source-built x64 DLL produced by this interface layer has SHA-256
+`2291DDA6A7FEE1D167F79D8846DB19BF4E974A22D795CB01D7BBF0B9764008EF`.
+The reporter subsequently confirmed that it works correctly in Selur Hybrid
+2026.03.21.1 on Windows 10 Pro 22H2 x64 with an AMD Ryzen 9950X: it loaded,
+completed the Rec.601-to-Rec.709 workflow without crashing, and did not produce
+the erroneous FCC-to-SMPTE-240M color shift.
+
+That result validates the reconstructed interface-v6/API3 linkage path for the
+reported Hybrid runtime. It does not imply exhaustive compatibility with every
+classic AviSynth host or every unused declaration in this intentionally minimal
+header.
 
 ## Reference locations
 
